@@ -271,6 +271,9 @@ func main() {
 	status.SetDoneFunc(func(key tcell.Key) {
 		app.SetFocus(menuList)
 	})
+	menuList.SetBorder(true).SetTitle("Menu")
+	tableView.SetBorder(true).SetTitle("Flows")
+	status.SetBorder(true).SetTitle("Logs")
 
 	flex := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(menuList, 0, 2, true).AddItem(tableView, 0, 5, false).AddItem(status, 0, 1, false)
 
