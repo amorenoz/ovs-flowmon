@@ -90,7 +90,7 @@ func (ft *FlowTable) Draw(tv *tview.Table) {
 		cell = tview.NewTableCell(fmt.Sprintf("%d", int(flow.TotalBytes))).
 			SetTextColor(tcell.ColorWhite).
 			SetAlign(tview.AlignLeft).
-			SetSelectable(true)
+			SetSelectable(false)
 		tv.SetCell(1+i, col, cell)
 		col += 1
 		cell = tview.NewTableCell(fmt.Sprintf("%d", int(flow.TotalPackets))).
@@ -109,7 +109,7 @@ func (ft *FlowTable) Draw(tv *tview.Table) {
 		cell = tview.NewTableCell(fmt.Sprintf("%f %s", float64(flow.LastBps/1000), delta)).
 			SetTextColor(tcell.ColorWhite).
 			SetAlign(tview.AlignLeft).
-			SetSelectable(true)
+			SetSelectable(false)
 
 		tv.SetCell(1+i, col, cell)
 		col += 1
@@ -117,7 +117,7 @@ func (ft *FlowTable) Draw(tv *tview.Table) {
 }
 
 func (ft *FlowTable) ProcessFlow(msg *flowmessage.FlowMessage) {
-	log.Infof("Processing Flow Message: %+v", msg)
+	log.Debugf("Processing Flow Message: %+v", msg)
 	matched := false
 	flowKey := flowmon.NewFlowKey(msg)
 	for _, flowInfo := range ft.flows {
@@ -240,7 +240,9 @@ func main() {
 		}
 		return event
 	})
-	tableView = tview.NewTable().SetSelectable(true, true)
+	tableView = tview.NewTable().
+		SetSelectable(true, false). // Allow flows to be selected
+		SetFixed(1, 1)              // Make it always focus the top left
 	flowTable = NewFlowTable()
 	status := tview.NewTextView().SetText("Stopped. Press Start to start capturing\n")
 	log.SetOutput(status)
