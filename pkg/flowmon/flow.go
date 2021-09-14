@@ -151,10 +151,6 @@ func (fk *FlowKey) GetFieldString(fieldName string) (string, error) {
 	if !field.IsValid() {
 		return "", fmt.Errorf("Failed to get Field %s from FlowKey", fieldName)
 	}
-	if field.Type().Kind() == reflect.Uint32 && fieldName != "FlowDirection" {
-		return fmt.Sprintf("%d", int(field.Uint())), nil
-
-	}
 	return fmt.Sprintf("%s", field.Interface()), nil
 }
 
