@@ -21,6 +21,7 @@ var (
 	tableView *tview.Table
 	flowTable *FlowTable
 	app       *tview.Application
+	started   bool = false
 
 	default_fields []string = []string{"InIf", "OutIf", "SrcMac", "DstMac", "VlanID", "Etype", "SrcAddr", "DstAddr", "Proto", "SrcPort", "DstPort", "FlowDirection"}
 )
@@ -239,7 +240,7 @@ func main() {
 		}
 		return event
 	})
-	tableView = tview.NewTable()
+	tableView = tview.NewTable().SetSelectable(true, true)
 	flowTable = NewFlowTable()
 	status := tview.NewTextView().SetText("Stopped. Press Start to start capturing\n")
 	log.SetOutput(status)
@@ -247,7 +248,10 @@ func main() {
 	// Top Menu
 	start := func() {
 		log.Info("Started flow processing")
-		readFlows(flowTable)
+		if !started {
+			readFlows(flowTable)
+			started = true
+		}
 		app.SetFocus(tableView)
 	}
 	stop := func() {
@@ -271,9 +275,9 @@ func main() {
 	status.SetDoneFunc(func(key tcell.Key) {
 		app.SetFocus(menuList)
 	})
-	menuList.SetBorder(true).SetTitle("Menu")
-	tableView.SetBorder(true).SetTitle("Flows")
-	status.SetBorder(true).SetTitle("Logs")
+	menuList.SetBorder(true).SetBorderPadding(1, 1, 2, 0).SetTitle("Menu")
+	tableView.SetBorder(true).SetBorderPadding(1, 1, 2, 0).SetTitle("Flows")
+	status.SetBorder(true).SetBorderPadding(1, 1, 2, 0).SetTitle("Logs")
 
 	flex := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(menuList, 0, 2, true).AddItem(tableView, 0, 5, false).AddItem(status, 0, 1, false)
 
