@@ -204,8 +204,6 @@ type Dispatcher struct {
 	flowTable *FlowTable
 }
 
-// Implements FormatDriver
-
 func (d *Dispatcher) Prepare() error {
 	return nil
 }
