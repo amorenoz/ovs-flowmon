@@ -89,6 +89,7 @@ func (h DecUint32) String() string {
 	return fmt.Sprintf("%d", int(h))
 }
 
+// DecUint32 is an integer that prefers to be printed in hexadecimal format
 type DecUint64 uint64
 
 func (h DecUint64) String() string {
@@ -175,6 +176,9 @@ type FlowInfo struct {
 	LastTimeReceived  DecUint64
 	FirstTimeReceived DecUint64
 
+	FirstTimeFlowStart DecUint64
+	LastTimeFlowEnd    DecUint64
+
 	TotalBytes   DecUint64
 	TotalPackets DecUint64
 
@@ -191,30 +195,28 @@ func (f *FlowInfo) Update(message *flowmessage.FlowMessage) {
 	f.TotalBytes += DecUint64(message.Bytes)
 	f.TotalPackets += DecUint64(message.Packets)
 
-	// FIXME: Should we use TimeFlowEnd?
-	//var newBps DecUint64 = 0
-	//if message.TimeFlowEnd != message.TimeFlowStart {
-	//	newBps = DecUint64(message.Bytes / (message.TimeFlowEnd - message.TimeFlowStart))
-	//}
-	var newBps DecUint64 = 0
-	if message.TimeReceived != uint64(f.LastTimeReceived) {
-		newBps = DecUint64(message.Bytes / (message.TimeReceived - uint64(f.LastTimeReceived)))
-	}
-
 	f.LastTimeReceived = DecUint64(message.TimeReceived)
-	f.LastDeltaBps = DecUint64(newBps - DecUint64(f.LastBps))
+	f.LastTimeFlowEnd = DecUint64(message.TimeFlowEnd)
+
+	newBps := DecUint64(f.TotalBytes / (f.LastTimeFlowEnd - f.FirstTimeReceived))
+
+	f.LastDeltaBps = DecUint64(newBps - f.LastBps)
 	f.LastBps = newBps
 }
 
 func NewFlowInfo(message *flowmessage.FlowMessage) *FlowInfo {
+	var bps uint64 = 0
+	if message.TimeFlowEnd > message.TimeFlowStart {
+		bps = uint64(message.Bytes / (message.TimeFlowEnd - message.TimeFlowStart))
+	}
 	return &FlowInfo{
 		Key:               NewFlowKey(message),
 		LastTimeReceived:  DecUint64(message.TimeReceived),
 		FirstTimeReceived: DecUint64(message.TimeReceived),
 		TotalBytes:        DecUint64(message.Bytes),
 		TotalPackets:      DecUint64(message.Packets),
-		LastBps:           0,
-		LastDeltaBps:      0,
+		LastBps:           DecUint64(bps),
+		LastDeltaBps:      DecUint64(0),
 		ForwardingStatus:  message.ForwardingStatus,
 	}
 }

@@ -68,7 +68,7 @@ func (ft *FlowTable) Draw(tv *tview.Table) {
 		SetSelectable(false)
 	tv.SetCell(0, col, cell)
 	col += 1
-	cell = tview.NewTableCell("kbps").
+	cell = tview.NewTableCell("Rate(kbps)").
 		SetTextColor(tcell.ColorWhite).
 		SetAlign(tview.AlignLeft).
 		SetSelectable(false)
@@ -106,7 +106,7 @@ func (ft *FlowTable) Draw(tv *tview.Table) {
 		} else if flow.LastDeltaBps < 0 {
 			delta = "↓"
 		}
-		cell = tview.NewTableCell(fmt.Sprintf("%f %s", float64(flow.LastBps/1000), delta)).
+		cell = tview.NewTableCell(fmt.Sprintf("%.1f %s", float64(flow.LastBps)/1000, delta)).
 			SetTextColor(tcell.ColorWhite).
 			SetAlign(tview.AlignLeft).
 			SetSelectable(false)
