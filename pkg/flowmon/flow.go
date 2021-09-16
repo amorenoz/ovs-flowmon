@@ -223,7 +223,7 @@ type FlowAggregate struct {
 	LastTimeFlowEnd    DecUint64
 
 	LastBps      DecUint64
-	LastDeltaBps DecUint64
+	LastDeltaBps int
 
 	LastForwardingStatus uint32
 }
@@ -264,7 +264,7 @@ func (fa *FlowAggregate) AppendIfMatches(flowInfo *FlowInfo) (bool, error) {
 		newBps = DecUint64(fa.TotalBytes / (fa.LastTimeFlowEnd - fa.FirstTimeFlowStart))
 	}
 
-	fa.LastDeltaBps = DecUint64(newBps - fa.LastBps)
+	fa.LastDeltaBps = int(newBps) - int(fa.LastBps)
 	fa.LastBps = newBps
 
 	fa.Flows = append(fa.Flows, flowInfo)
