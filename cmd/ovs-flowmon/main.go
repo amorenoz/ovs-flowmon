@@ -27,14 +27,16 @@ var (
 )
 
 type FlowTable struct {
-	flows []*flowmon.FlowInfo
-	keys  []string
+	flows      []*flowmon.FlowInfo
+	aggregates []*flowmon.FlowAggregate
+	keys       []string
 }
 
 func NewFlowTable() *FlowTable {
 	return &FlowTable{
-		flows: make([]*flowmon.FlowInfo, 0),
-		keys:  default_fields,
+		flows:      make([]*flowmon.FlowInfo, 0),
+		aggregates: make([]*flowmon.FlowAggregate, 0),
+		keys:       default_fields,
 	}
 }
 
@@ -43,7 +45,7 @@ func (ft *FlowTable) InsertFlow(f *flowmon.FlowInfo) {
 	// TODO: Different kind of sorting
 	// For now, prepend the last received flow at the top
 	log.Debugf("Inserting %#v", f)
-	ft.flows = append([]*flowmon.FlowInfo{f}, ft.flows...)
+	ft.flows = append(ft.flows, f)
 }
 
 func (ft *FlowTable) Draw(tv *tview.Table) {
@@ -75,9 +77,9 @@ func (ft *FlowTable) Draw(tv *tview.Table) {
 	tv.SetCell(0, col, cell)
 	col += 1
 
-	for i, flow := range ft.flows {
+	for i, agg := range ft.aggregates {
 		for col, key := range ft.keys {
-			fieldStr, err := flow.Key.GetFieldString(key)
+			fieldStr, err := agg.GetFieldString(key)
 			if err != nil {
 				log.Error(err)
 				fieldStr = "err"
@@ -87,13 +89,13 @@ func (ft *FlowTable) Draw(tv *tview.Table) {
 		}
 		col := len(ft.keys)
 
-		cell = tview.NewTableCell(fmt.Sprintf("%d", int(flow.TotalBytes))).
+		cell = tview.NewTableCell(fmt.Sprintf("%d", int(agg.TotalBytes))).
 			SetTextColor(tcell.ColorWhite).
 			SetAlign(tview.AlignLeft).
 			SetSelectable(false)
 		tv.SetCell(1+i, col, cell)
 		col += 1
-		cell = tview.NewTableCell(fmt.Sprintf("%d", int(flow.TotalPackets))).
+		cell = tview.NewTableCell(fmt.Sprintf("%d", int(agg.TotalPackets))).
 			SetTextColor(tcell.ColorWhite).
 			SetAlign(tview.AlignLeft).
 			SetSelectable(false)
@@ -101,12 +103,12 @@ func (ft *FlowTable) Draw(tv *tview.Table) {
 		col += 1
 
 		delta := "="
-		if flow.LastDeltaBps > 0 {
+		if agg.LastDeltaBps > 0 {
 			delta = "↑"
-		} else if flow.LastDeltaBps < 0 {
+		} else if agg.LastDeltaBps < 0 {
 			delta = "↓"
 		}
-		cell = tview.NewTableCell(fmt.Sprintf("%.1f %s", float64(flow.LastBps)/1000, delta)).
+		cell = tview.NewTableCell(fmt.Sprintf("%.1f %s", float64(agg.LastBps)/1000, delta)).
 			SetTextColor(tcell.ColorWhite).
 			SetAlign(tview.AlignLeft).
 			SetSelectable(false)
@@ -118,17 +120,29 @@ func (ft *FlowTable) Draw(tv *tview.Table) {
 
 func (ft *FlowTable) ProcessFlow(msg *flowmessage.FlowMessage) {
 	log.Debugf("Processing Flow Message: %+v", msg)
-	matched := false
-	flowKey := flowmon.NewFlowKey(msg)
-	for _, flowInfo := range ft.flows {
-		if flowInfo.Key.Matches(flowKey) {
-			flowInfo.Update(msg)
-			matched = true
+
+	flowInfo := flowmon.NewFlowInfo(msg)
+	ft.flows = append(ft.flows, flowInfo)
+
+	var matched bool = false
+	var err error = nil
+	for _, agg := range ft.aggregates {
+		matched, err = agg.AppendIfMatches(flowInfo)
+		if err != nil {
+			log.Error(err)
+			return
+		}
+		if matched {
 			break
 		}
 	}
 	if !matched {
-		ft.InsertFlow(flowmon.NewFlowInfo(msg))
+		// Create new Aggregate for this flow
+		newAgg := flowmon.NewFlowAggregate(ft.keys)
+		if match, err := newAgg.AppendIfMatches(flowInfo); !match || err != nil {
+			log.Fatal(err)
+		}
+		ft.aggregates = append(ft.aggregates, newAgg)
 	}
 }
 

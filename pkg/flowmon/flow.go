@@ -124,26 +124,6 @@ type FlowKey struct {
 	ICMPCode HexUint32
 }
 
-func NewFlowKey(msg *flowmessage.FlowMessage) *FlowKey {
-	return &FlowKey{
-		FlowDirection: FlowDirection(msg.FlowDirection),
-		InIf:          DecUint32(msg.InIf),
-		OutIf:         DecUint32(msg.OutIf),
-		SrcMac:        macFromUint64(msg.SrcMac),
-		DstMac:        macFromUint64(msg.DstMac),
-		Etype:         Etype(msg.Etype),
-		VlanID:        DecUint32(msg.VlanId),
-		SrcAddr:       ipFromBytes(msg.SrcAddr),
-		DstAddr:       ipFromBytes(msg.DstAddr),
-		Proto:         Proto(msg.Proto),
-		SrcPort:       DecUint32(msg.SrcPort),
-		DstPort:       DecUint32(msg.DstPort),
-		TCPFlags:      HexUint32(msg.TCPFlags),
-		ICMPType:      HexUint32(msg.IcmpType),
-		ICMPCode:      HexUint32(msg.IcmpCode),
-	}
-}
-
 // GetFieldString returns the string representation of the given fieldName
 func (fk *FlowKey) GetFieldString(fieldName string) (string, error) {
 
@@ -156,8 +136,24 @@ func (fk *FlowKey) GetFieldString(fieldName string) (string, error) {
 }
 
 // Matches returns whether another FlowKey is equal to this one
-func (fk *FlowKey) Matches(other *FlowKey) bool {
-	return reflect.DeepEqual(fk, other)
+// mask can be provided with a list of fields to compare
+func (fk *FlowKey) Matches(other *FlowKey, mask []string) (bool, error) {
+	if len(mask) == 0 {
+		return reflect.DeepEqual(fk, other), nil
+	}
+	thisV := reflect.ValueOf(fk).Elem()
+	otherV := reflect.ValueOf(other).Elem()
+	for _, fieldName := range mask {
+		thisField := thisV.FieldByName(fieldName)
+		otherField := otherV.FieldByName(fieldName)
+		if !thisField.IsValid() || !otherField.IsValid() {
+			return false, fmt.Errorf("Comparison error. Field %s is not present in FlowKey", fieldName)
+		}
+		if !reflect.DeepEqual(thisField.Interface(), otherField.Interface()) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func macFromUint64(uintMac uint64) net.HardwareAddr {
@@ -170,53 +166,125 @@ func ipFromBytes(ipBytes []byte) net.IP {
 	return net.IP(ipBytes)
 }
 
-// FlowInfo is a Flow metadata
+// FlowInfo contains a FlowKey and it's metadta
 type FlowInfo struct {
-	Key               *FlowKey
-	LastTimeReceived  DecUint64
-	FirstTimeReceived DecUint64
+	Key *FlowKey
 
-	FirstTimeFlowStart DecUint64
-	LastTimeFlowEnd    DecUint64
+	Bytes   DecUint64
+	Packets DecUint64
 
-	TotalBytes   DecUint64
-	TotalPackets DecUint64
+	TimeReceived DecUint64
 
-	LastBps      DecUint64
-	LastDeltaBps DecUint64
+	TimeFlowStart DecUint64
+	TimeFlowEnd   DecUint64
 
 	ForwardingStatus uint32
 }
 
-// Update updates the FlowInfo based on a FlowMessage
-func (f *FlowInfo) Update(message *flowmessage.FlowMessage) {
-	f.ForwardingStatus = message.ForwardingStatus
-
-	f.TotalBytes += DecUint64(message.Bytes)
-	f.TotalPackets += DecUint64(message.Packets)
-
-	f.LastTimeReceived = DecUint64(message.TimeReceived)
-	f.LastTimeFlowEnd = DecUint64(message.TimeFlowEnd)
-
-	newBps := DecUint64(f.TotalBytes / (f.LastTimeFlowEnd - f.FirstTimeReceived))
-
-	f.LastDeltaBps = DecUint64(newBps - f.LastBps)
-	f.LastBps = newBps
+func NewFlowInfo(msg *flowmessage.FlowMessage) *FlowInfo {
+	return &FlowInfo{
+		Key: &FlowKey{
+			FlowDirection: FlowDirection(msg.FlowDirection),
+			InIf:          DecUint32(msg.InIf),
+			OutIf:         DecUint32(msg.OutIf),
+			SrcMac:        macFromUint64(msg.SrcMac),
+			DstMac:        macFromUint64(msg.DstMac),
+			Etype:         Etype(msg.Etype),
+			VlanID:        DecUint32(msg.VlanId),
+			SrcAddr:       ipFromBytes(msg.SrcAddr),
+			DstAddr:       ipFromBytes(msg.DstAddr),
+			Proto:         Proto(msg.Proto),
+			SrcPort:       DecUint32(msg.SrcPort),
+			DstPort:       DecUint32(msg.DstPort),
+			TCPFlags:      HexUint32(msg.TCPFlags),
+			ICMPType:      HexUint32(msg.IcmpType),
+			ICMPCode:      HexUint32(msg.IcmpCode),
+		},
+		TimeReceived:     DecUint64(msg.TimeReceived),
+		TimeFlowStart:    DecUint64(msg.TimeFlowStart),
+		TimeFlowEnd:      DecUint64(msg.TimeFlowEnd),
+		Bytes:            DecUint64(msg.Bytes),
+		Packets:          DecUint64(msg.Packets),
+		ForwardingStatus: msg.ForwardingStatus,
+	}
 }
 
-func NewFlowInfo(message *flowmessage.FlowMessage) *FlowInfo {
-	var bps uint64 = 0
-	if message.TimeFlowEnd > message.TimeFlowStart {
-		bps = uint64(message.Bytes / (message.TimeFlowEnd - message.TimeFlowStart))
+// FlowAggregate is a list of flows aggregated by a set of keys
+type FlowAggregate struct {
+	Keys  []string
+	Flows []*FlowInfo
+
+	TotalBytes   DecUint64
+	TotalPackets DecUint64
+
+	LastTimeReceived   DecUint64
+	FirstTimeReceived  DecUint64
+	FirstTimeFlowStart DecUint64
+	LastTimeFlowEnd    DecUint64
+
+	LastBps      DecUint64
+	LastDeltaBps DecUint64
+
+	LastForwardingStatus uint32
+}
+
+func NewFlowAggregate(keys []string) *FlowAggregate {
+	return &FlowAggregate{
+		Keys:  keys,
+		Flows: make([]*FlowInfo, 0),
 	}
-	return &FlowInfo{
-		Key:               NewFlowKey(message),
-		LastTimeReceived:  DecUint64(message.TimeReceived),
-		FirstTimeReceived: DecUint64(message.TimeReceived),
-		TotalBytes:        DecUint64(message.Bytes),
-		TotalPackets:      DecUint64(message.Packets),
-		LastBps:           DecUint64(bps),
-		LastDeltaBps:      DecUint64(0),
-		ForwardingStatus:  message.ForwardingStatus,
+}
+
+// Append appends the FlowInfo to the current Aggregate
+func (fa *FlowAggregate) AppendIfMatches(flowInfo *FlowInfo) (bool, error) {
+	match, err := fa.matches(flowInfo)
+	if err != nil {
+		return false, err
 	}
+	if !match {
+		return false, nil
+	}
+	fa.LastForwardingStatus = flowInfo.ForwardingStatus
+
+	fa.TotalBytes += DecUint64(flowInfo.Bytes)
+	fa.TotalPackets += DecUint64(flowInfo.Packets)
+
+	if fa.FirstTimeReceived == 0 {
+		fa.FirstTimeReceived = DecUint64(flowInfo.TimeReceived)
+	}
+	if fa.FirstTimeFlowStart == 0 {
+		fa.FirstTimeFlowStart = DecUint64(flowInfo.TimeFlowStart)
+	}
+
+	fa.LastTimeReceived = DecUint64(flowInfo.TimeReceived)
+	fa.LastTimeFlowEnd = DecUint64(flowInfo.TimeFlowEnd)
+
+	var newBps DecUint64 = 0
+	if fa.LastTimeFlowEnd != fa.FirstTimeFlowStart {
+		newBps = DecUint64(fa.TotalBytes / (fa.LastTimeFlowEnd - fa.FirstTimeFlowStart))
+	}
+
+	fa.LastDeltaBps = DecUint64(newBps - fa.LastBps)
+	fa.LastBps = newBps
+
+	fa.Flows = append(fa.Flows, flowInfo)
+	return true, nil
+}
+
+func (fa *FlowAggregate) matches(flowInfo *FlowInfo) (bool, error) {
+	if len(fa.Flows) == 0 {
+		// Accept new members to the aggregate if emtpy
+		return true, nil
+	}
+	return fa.Flows[0].Key.Matches(flowInfo.Key, fa.Keys)
+}
+
+// GetFieldString returns the string representation of the given fieldName of the first flow
+// Since only the first flow is used, it is assumed that only fields within the key list are
+// used
+func (fa *FlowAggregate) GetFieldString(fieldName string) (string, error) {
+	if len(fa.Flows) == 0 {
+		return "", fmt.Errorf("Empty Aggregate")
+	}
+	return fa.Flows[0].Key.GetFieldString(fieldName)
 }
