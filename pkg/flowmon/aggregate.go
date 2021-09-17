@@ -1,6 +1,9 @@
 package flowmon
 
-import "fmt"
+import (
+	"fmt"
+	"reflect"
+)
 
 // FlowAggregate is a list of flows aggregated by a set of keys
 type FlowAggregate struct {
@@ -80,4 +83,40 @@ func (fa *FlowAggregate) GetFieldString(fieldName string) (string, error) {
 		return "", fmt.Errorf("Empty Aggregate")
 	}
 	return fa.Flows[0].Key.GetFieldString(fieldName)
+}
+
+// Less compares two FlowAggregates by a field in their keys
+func (fa *FlowAggregate) Less(fieldName string, other *FlowAggregate) (bool, error) {
+	if len(fa.Flows) == 0 || len(other.Flows) == 0 {
+		return false, fmt.Errorf("Empty Aggregate")
+	}
+
+	if !fa.isAggregate(fieldName) || !other.isAggregate(fieldName) {
+		return false, fmt.Errorf("Sorting key must be part of aggregate keys")
+	}
+
+	thisV, err := fa.Flows[0].Key.GetField(fieldName)
+	if err != nil {
+		return false, err
+	}
+	otherV, err := other.Flows[0].Key.GetField(fieldName)
+	if err != nil {
+		return false, err
+	}
+	switch thisV.(type) {
+	case uint32, uint64, HexUint32, DecUint32, DecUint64:
+		return reflect.ValueOf(thisV).Uint() < reflect.ValueOf(otherV).Uint(), nil
+	default:
+		return fmt.Sprint(thisV) < fmt.Sprint(otherV), nil
+	}
+
+}
+
+func (fa *FlowAggregate) isAggregate(fieldName string) bool {
+	for _, k := range fa.Keys {
+		if k == fieldName {
+			return true
+		}
+	}
+	return false
 }

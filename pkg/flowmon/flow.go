@@ -126,13 +126,21 @@ type FlowKey struct {
 
 // GetFieldString returns the string representation of the given fieldName
 func (fk *FlowKey) GetFieldString(fieldName string) (string, error) {
+	val, err := fk.GetField(fieldName)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s", val), nil
+}
 
+// GetField returns the value of a given fieldName
+func (fk *FlowKey) GetField(fieldName string) (interface{}, error) {
 	flowKeyV := reflect.ValueOf(fk).Elem()
 	field := flowKeyV.FieldByName(fieldName)
 	if !field.IsValid() {
 		return "", fmt.Errorf("Failed to get Field %s from FlowKey", fieldName)
 	}
-	return fmt.Sprintf("%s", field.Interface()), nil
+	return field.Interface(), nil
 }
 
 // Matches returns whether another FlowKey is equal to this one
