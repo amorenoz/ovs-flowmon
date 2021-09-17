@@ -3,6 +3,7 @@ package view
 import (
 	"amorenoz/ovs-flowmon/pkg/flowmon"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/gdamore/tcell/v2"
@@ -20,9 +21,14 @@ type FlowTable struct {
 	View      *tview.Table
 	StatsView *tview.Table
 	// mutex to protect aggregates (not flows)
-	mutex      sync.RWMutex
+	mutex sync.RWMutex
+
+	// data
 	flows      []*flowmon.FlowInfo
 	aggregates []*flowmon.FlowAggregate
+	lessFunc   func(one, other *flowmon.FlowAggregate) bool
+
+	// configuration
 	// Keeping both the list and the map for efficiency
 	aggregateKeyList []string
 	aggregateKeyMap  map[string]bool
@@ -58,6 +64,9 @@ func NewFlowTable(fields []string, aggregates map[string]bool) *FlowTable {
 		aggregateKeyList: aggregateKeyList,
 		aggregateKeyMap:  aggregates,
 		keys:             fields,
+		lessFunc: func(one, other *flowmon.FlowAggregate) bool {
+			return one.LastTimeReceived < other.LastTimeReceived
+		},
 	}
 }
 
@@ -77,10 +86,7 @@ func (ft *FlowTable) UpdateKeys(aggregates map[string]bool) {
 	ft.aggregateKeyList = aggregateKeyList
 	ft.aggregateKeyMap = aggregates
 	// Need to recompute all aggregations
-	ft.aggregates = make([]*flowmon.FlowAggregate, 0)
-	for _, flow := range ft.flows {
-		ft.ProcessFlow(flow)
-	}
+	ft.recompute()
 }
 
 func (ft *FlowTable) ToggleAggregate(index int) {
@@ -94,10 +100,6 @@ func (ft *FlowTable) ToggleAggregate(index int) {
 	ft.UpdateKeys(newAggregates)
 	ft.View.Clear()
 	ft.Draw()
-
-	// Restore selectable mode and SelectedFunc
-	ft.SetSelectMode(ModeRows)
-
 }
 
 func (ft *FlowTable) SetSelectMode(mode SelectMode) {
@@ -223,6 +225,76 @@ func (ft *FlowTable) ProcessFlow(flowInfo *flowmon.FlowInfo) {
 		if match, err := newAgg.AppendIfMatches(flowInfo); !match || err != nil {
 			log.Fatal(err)
 		}
-		ft.aggregates = append(ft.aggregates, newAgg)
+
+		// Sorted insertion
+		insertionPoint := sort.Search(len(ft.aggregates), func(i int) bool {
+			return ft.lessFunc(newAgg, ft.aggregates[i])
+		})
+		if insertionPoint == len(ft.aggregates) {
+			ft.aggregates = append(ft.aggregates, newAgg)
+		} else {
+			ft.aggregates = append(ft.aggregates[0:insertionPoint],
+				append([]*flowmon.FlowAggregate{newAgg}, ft.aggregates[insertionPoint:]...)...)
+		}
+	}
+}
+
+// SetSortingKey sets the field that will be used for sorting the aggregates
+func (ft *FlowTable) SetSortingColumn(index int) error {
+	colName := ft.View.GetCell(0, index).Text
+	return ft.SetSortingKey(colName)
+}
+
+// SetSortingKey sets the field that will be used for sorting the aggregates
+func (ft *FlowTable) SetSortingKey(key string) error {
+	ft.mutex.Lock()
+	switch key {
+	case "LastTimeReceived":
+		ft.lessFunc = func(one, other *flowmon.FlowAggregate) bool {
+			return one.LastTimeReceived < other.LastTimeReceived
+		}
+	case "LastBps":
+		ft.lessFunc = func(one, other *flowmon.FlowAggregate) bool {
+			return one.LastBps < other.LastBps
+		}
+	case "TotalBytes":
+		ft.lessFunc = func(one, other *flowmon.FlowAggregate) bool {
+			return one.TotalBytes < other.TotalBytes
+		}
+	case "TotalPackets":
+		ft.lessFunc = func(one, other *flowmon.FlowAggregate) bool {
+			return one.TotalBytes < other.TotalBytes
+		}
+	default:
+		found := false
+		for _, k := range ft.keys {
+			if k == key {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("Cannot set sorting key to %s", key)
+		}
+		ft.lessFunc = func(one, other *flowmon.FlowAggregate) bool {
+			res, _ := one.Less(key, other)
+			return res
+		}
+	}
+
+	ft.recompute()
+	ft.mutex.Unlock()
+
+	// Do not hold the lock while redrawing
+	ft.View.Clear()
+	ft.Draw()
+	return nil
+}
+
+// Recompute all aggregates
+func (ft *FlowTable) recompute() {
+	ft.aggregates = make([]*flowmon.FlowAggregate, 0)
+	for _, flow := range ft.flows {
+		ft.ProcessFlow(flow)
 	}
 }
