@@ -170,7 +170,7 @@ func main() {
 
 	show_aggregate := func() {
 		// Make columns selectable
-		flowTable.SetSelectMode(view.ModeCols)
+		flowTable.SetSelectMode(view.ModeColsKeys)
 		app.SetFocus(flowTable.View)
 		flowTable.View.SetSelectedFunc(func(row, col int) {
 			flowTable.ToggleAggregate(col)
@@ -184,10 +184,13 @@ func main() {
 
 	sort_by := func() {
 		// Make columns selectable
-		flowTable.SetSelectMode(view.ModeCols)
+		flowTable.SetSelectMode(view.ModeColsAll)
 		app.SetFocus(flowTable.View)
 		flowTable.View.SetSelectedFunc(func(row, col int) {
-			flowTable.SetSortingColumn(col)
+			err := flowTable.SetSortingColumn(col)
+			if err != nil {
+				log.Error(err)
+			}
 			flowTable.SetSelectMode(view.ModeRows)
 			flowTable.View.SetSelectedFunc(func(row, col int) {
 				app.SetFocus(menuList)

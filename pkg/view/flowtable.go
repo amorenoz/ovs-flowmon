@@ -14,8 +14,9 @@ import (
 
 type SelectMode int
 
-const ModeRows SelectMode = 0
-const ModeCols SelectMode = 1
+const ModeRows SelectMode = 0     // Only Rows are selectable
+const ModeColsAll SelectMode = 1  // All Columns are selectable
+const ModeColsKeys SelectMode = 2 // Only Flow Key columns are selectable
 
 type FlowTable struct {
 	View      *tview.Table
@@ -106,7 +107,7 @@ func (ft *FlowTable) SetSelectMode(mode SelectMode) {
 	switch mode {
 	case ModeRows:
 		ft.View.SetSelectable(true, false)
-	case ModeCols:
+	case ModeColsAll, ModeColsKeys:
 		ft.View.SetSelectable(false, true)
 	}
 	ft.mode = mode
@@ -117,7 +118,7 @@ func (ft *FlowTable) Draw() {
 	var cell *tview.TableCell
 	// Draw Key
 	for col, key := range ft.keys {
-		cell = tview.NewTableCell(key).SetTextColor(tcell.ColorWhite).SetAlign(tview.AlignLeft).SetSelectable(ft.mode == ModeCols)
+		cell = tview.NewTableCell(key).SetTextColor(tcell.ColorWhite).SetAlign(tview.AlignLeft).SetSelectable(ft.mode != ModeRows)
 		ft.View.SetCell(0, col, cell)
 	}
 
@@ -126,19 +127,19 @@ func (ft *FlowTable) Draw() {
 	cell = tview.NewTableCell("TotalBytes").
 		SetTextColor(tcell.ColorWhite).
 		SetAlign(tview.AlignLeft).
-		SetSelectable(false)
+		SetSelectable(ft.mode == ModeColsAll)
 	ft.View.SetCell(0, col, cell)
 	col += 1
 	cell = tview.NewTableCell("TotalPackets").
 		SetTextColor(tcell.ColorWhite).
 		SetAlign(tview.AlignLeft).
-		SetSelectable(false)
+		SetSelectable(ft.mode == ModeColsAll)
 	ft.View.SetCell(0, col, cell)
 	col += 1
 	cell = tview.NewTableCell("Rate(kbps)").
 		SetTextColor(tcell.ColorWhite).
 		SetAlign(tview.AlignLeft).
-		SetSelectable(false)
+		SetSelectable(ft.mode == ModeColsAll)
 	ft.View.SetCell(0, col, cell)
 	col += 1
 
@@ -247,7 +248,6 @@ func (ft *FlowTable) SetSortingColumn(index int) error {
 
 // SetSortingKey sets the field that will be used for sorting the aggregates
 func (ft *FlowTable) SetSortingKey(key string) error {
-	ft.mutex.Lock()
 	switch key {
 	case "LastTimeReceived":
 		ft.lessFunc = func(one, other *flowmon.FlowAggregate) bool {
@@ -276,16 +276,20 @@ func (ft *FlowTable) SetSortingKey(key string) error {
 		if !found {
 			return fmt.Errorf("Cannot set sorting key to %s", key)
 		}
+		if !ft.aggregateKeyMap[key] {
+			return fmt.Errorf("Cannot set sorting key to %s since it's not part of the aggregate", key)
+		}
 		ft.lessFunc = func(one, other *flowmon.FlowAggregate) bool {
 			res, _ := one.Less(key, other)
 			return res
 		}
 	}
 
+	ft.mutex.Lock()
 	ft.recompute()
 	ft.mutex.Unlock()
-
 	// Do not hold the lock while redrawing
+
 	ft.View.Clear()
 	ft.Draw()
 	return nil
