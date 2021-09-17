@@ -147,6 +147,7 @@ func main() {
 	menuList := tview.NewList().
 		ShowSecondaryText(false)
 	menu.AddItem(menuList, 0, 2, true)
+	menu.AddItem(flowTable.StatsView, 0, 2, false)
 
 	start := func() {
 		log.Info("Started flow processing")
@@ -162,6 +163,9 @@ func main() {
 	}
 	logs := func() {
 		app.SetFocus(status)
+	}
+	flows := func() {
+		app.SetFocus(flowTable.View)
 	}
 
 	show_aggregate := func() {
@@ -179,9 +183,9 @@ func main() {
 
 	menuList.AddItem("Start", "", 's', start).
 		AddItem("Stop", "", 't', stop).
+		AddItem("Flows", "", 'f', flows).
 		AddItem("Logs", "", 'l', logs).
 		AddItem("Add/Remove Fields from aggregate", "", 'a', show_aggregate)
-	menuList.SetBorderPadding(1, 1, 2, 2)
 	flowTable.View.SetDoneFunc(func(key tcell.Key) {
 		app.SetFocus(menuList)
 	})
@@ -191,9 +195,10 @@ func main() {
 	status.SetDoneFunc(func(key tcell.Key) {
 		app.SetFocus(menuList)
 	})
-	menu.SetBorder(true).SetBorderPadding(1, 1, 2, 0).SetTitle("Menu")
+	menuList.SetBorder(true).SetBorderPadding(1, 1, 2, 0).SetTitle("Menu")
 	flowTable.View.SetBorder(true).SetBorderPadding(1, 1, 2, 0).SetTitle("Flows")
 	status.SetBorder(true).SetBorderPadding(1, 1, 2, 0).SetTitle("Logs")
+	flowTable.StatsView.SetBorder(true).SetBorderPadding(1, 1, 2, 0).SetTitle("Stats")
 
 	flex := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(menu, 0, 2, true).AddItem(flowTable.View, 0, 5, false).AddItem(status, 0, 1, false)
 

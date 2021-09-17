@@ -17,7 +17,8 @@ const ModeRows SelectMode = 0
 const ModeCols SelectMode = 1
 
 type FlowTable struct {
-	View *tview.Table
+	View      *tview.Table
+	StatsView *tview.Table
 	// mutex to protect aggregates (not flows)
 	mutex      sync.RWMutex
 	flows      []*flowmon.FlowInfo
@@ -27,6 +28,9 @@ type FlowTable struct {
 	aggregateKeyMap  map[string]bool
 	keys             []string
 	mode             SelectMode
+
+	// Stats
+	nMessages int
 }
 
 func NewFlowTable(fields []string, aggregates map[string]bool) *FlowTable {
@@ -41,8 +45,13 @@ func NewFlowTable(fields []string, aggregates map[string]bool) *FlowTable {
 		SetFixed(1, 1).             // Make it always focus the top left
 		SetSelectable(true, false)  // Start in RowMode
 
+	stats := tview.NewTable().
+		SetCell(0, 0, tview.NewTableCell("Processed Messages: ")).
+		SetCell(0, 1, tview.NewTableCell(fmt.Sprintf("%d", 0)))
+
 	return &FlowTable{
 		View:             tableView,
+		StatsView:        stats,
 		mutex:            sync.RWMutex{},
 		flows:            make([]*flowmon.FlowInfo, 0),
 		aggregates:       make([]*flowmon.FlowAggregate, 0),
@@ -178,6 +187,8 @@ func (ft *FlowTable) Draw() {
 		ft.View.SetCell(1+i, col, cell)
 		col += 1
 	}
+	// Draw Stats
+	ft.StatsView.SetCell(0, 1, tview.NewTableCell(fmt.Sprintf("%d", ft.nMessages)))
 }
 
 func (ft *FlowTable) ProcessMessage(msg *flowmessage.FlowMessage) {
@@ -189,6 +200,7 @@ func (ft *FlowTable) ProcessMessage(msg *flowmessage.FlowMessage) {
 	ft.mutex.Lock()
 	defer ft.mutex.Unlock()
 	ft.ProcessFlow(flowInfo)
+	ft.nMessages += 1
 }
 
 // Caller must hold mutex
