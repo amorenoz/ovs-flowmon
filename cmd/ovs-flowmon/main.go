@@ -28,6 +28,11 @@ var (
 	aggregates map[string]bool
 )
 
+type SelectMode int
+
+const ModeRows SelectMode = 0
+const ModeCols SelectMode = 1
+
 type FlowTable struct {
 	// mutex to protect aggregates (not flows)
 	mutex      sync.RWMutex
@@ -37,15 +42,19 @@ type FlowTable struct {
 	aggregateKeyList []string
 	aggregateKeyMap  map[string]bool
 	keys             []string
+	view             *tview.Table
+	mode             SelectMode
 }
 
-func NewFlowTable() *FlowTable {
+func NewFlowTable(view *tview.Table) *FlowTable {
 	aggregateKeyList := []string{}
 	for _, field := range fieldList {
 		if aggregates[field] {
 			aggregateKeyList = append(aggregateKeyList, field)
 		}
 	}
+	// Initialize select mode
+	view.SetSelectable(true, false)
 	return &FlowTable{
 		mutex:            sync.RWMutex{},
 		flows:            make([]*flowmon.FlowInfo, 0),
@@ -53,6 +62,7 @@ func NewFlowTable() *FlowTable {
 		aggregateKeyList: aggregateKeyList,
 		aggregateKeyMap:  aggregates,
 		keys:             fieldList,
+		view:             view,
 	}
 }
 
@@ -74,12 +84,23 @@ func (ft *FlowTable) UpdateKeys(aggregates map[string]bool) {
 	}
 }
 
-func (ft *FlowTable) Draw(tv *tview.Table) {
+func (ft *FlowTable) SetSelectMode(mode SelectMode) {
+	switch mode {
+	case ModeRows:
+		tableView.SetSelectable(true, false)
+	case ModeCols:
+		tableView.SetSelectable(false, true)
+	}
+	ft.mode = mode
+	ft.Draw()
+}
+
+func (ft *FlowTable) Draw() {
 	var cell *tview.TableCell
 	// Draw Key
 	for col, key := range ft.keys {
-		cell = tview.NewTableCell(key).SetTextColor(tcell.ColorWhite).SetAlign(tview.AlignLeft).SetSelectable(false)
-		tv.SetCell(0, col, cell)
+		cell = tview.NewTableCell(key).SetTextColor(tcell.ColorWhite).SetAlign(tview.AlignLeft).SetSelectable(ft.mode == ModeCols)
+		ft.view.SetCell(0, col, cell)
 	}
 
 	col := len(ft.keys)
@@ -88,19 +109,19 @@ func (ft *FlowTable) Draw(tv *tview.Table) {
 		SetTextColor(tcell.ColorWhite).
 		SetAlign(tview.AlignLeft).
 		SetSelectable(false)
-	tv.SetCell(0, col, cell)
+	ft.view.SetCell(0, col, cell)
 	col += 1
 	cell = tview.NewTableCell("TotalPackets").
 		SetTextColor(tcell.ColorWhite).
 		SetAlign(tview.AlignLeft).
 		SetSelectable(false)
-	tv.SetCell(0, col, cell)
+	ft.view.SetCell(0, col, cell)
 	col += 1
 	cell = tview.NewTableCell("Rate(kbps)").
 		SetTextColor(tcell.ColorWhite).
 		SetAlign(tview.AlignLeft).
 		SetSelectable(false)
-	tv.SetCell(0, col, cell)
+	ft.view.SetCell(0, col, cell)
 	col += 1
 
 	ft.mutex.RLock()
@@ -118,8 +139,8 @@ func (ft *FlowTable) Draw(tv *tview.Table) {
 					fieldStr = "err"
 				}
 			}
-			cell = tview.NewTableCell(fieldStr).SetTextColor(tcell.ColorWhite).SetAlign(tview.AlignLeft).SetSelectable(true)
-			tv.SetCell(1+i, col, cell)
+			cell = tview.NewTableCell(fieldStr).SetTextColor(tcell.ColorWhite).SetAlign(tview.AlignLeft).SetSelectable(ft.mode == ModeRows)
+			ft.view.SetCell(1+i, col, cell)
 		}
 		col := len(ft.keys)
 
@@ -127,13 +148,13 @@ func (ft *FlowTable) Draw(tv *tview.Table) {
 			SetTextColor(tcell.ColorWhite).
 			SetAlign(tview.AlignLeft).
 			SetSelectable(false)
-		tv.SetCell(1+i, col, cell)
+		ft.view.SetCell(1+i, col, cell)
 		col += 1
 		cell = tview.NewTableCell(fmt.Sprintf("%d", int(agg.TotalPackets))).
 			SetTextColor(tcell.ColorWhite).
 			SetAlign(tview.AlignLeft).
 			SetSelectable(false)
-		tv.SetCell(1+i, col, cell)
+		ft.view.SetCell(1+i, col, cell)
 		col += 1
 
 		delta := "="
@@ -147,7 +168,7 @@ func (ft *FlowTable) Draw(tv *tview.Table) {
 			SetAlign(tview.AlignLeft).
 			SetSelectable(false)
 
-		tv.SetCell(1+i, col, cell)
+		ft.view.SetCell(1+i, col, cell)
 		col += 1
 	}
 }
@@ -276,7 +297,7 @@ func (d *Dispatcher) Send(key, data []byte) error {
 	}
 	d.flowTable.ProcessMessage(&msg)
 	app.QueueUpdateDraw(func() {
-		d.flowTable.Draw(tableView)
+		d.flowTable.Draw()
 	})
 	return nil
 }
@@ -285,9 +306,6 @@ type Listener interface {
 	OnNewFlow(flow *flowmessage.FlowMessage)
 }
 
-func UpdateFlowTableKeys() {
-
-}
 func main() {
 	aggregates = make(map[string]bool, 0)
 	for _, key := range fieldList {
@@ -304,7 +322,7 @@ func main() {
 	tableView = tview.NewTable().
 		SetSelectable(true, false). // Allow flows to be selected
 		SetFixed(1, 1)              // Make it always focus the top left
-	flowTable = NewFlowTable()
+	flowTable = NewFlowTable(tableView)
 	status := tview.NewTextView().SetText("Stopped. Press Start to start capturing\n")
 	log.SetOutput(status)
 
@@ -332,7 +350,7 @@ func main() {
 
 	show_aggregate := func() {
 		// Make columns selectable
-		tableView.SetSelectable(false, true)
+		flowTable.SetSelectMode(ModeCols)
 		app.SetFocus(tableView)
 		tableView.SetSelectedFunc(func(row, col int) {
 			colName := tableView.GetCell(0, col).Text
@@ -340,10 +358,10 @@ func main() {
 			aggregates[colName] = !aggregates[colName]
 			flowTable.UpdateKeys(aggregates)
 			tableView.Clear()
-			flowTable.Draw(tableView)
+			flowTable.Draw()
 
-			// Restore selectable columns and SelectedFunc
-			tableView.SetSelectable(true, false)
+			// Restore selectable mode and SelectedFunc
+			flowTable.SetSelectMode(ModeRows)
 			tableView.SetSelectedFunc(func(row, col int) {
 				app.SetFocus(menuList)
 			})
