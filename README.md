@@ -1,6 +1,9 @@
 # ovn-flowmon
 Terminal-based NetFlow/sFlow/IPFIX flow monitoring for OpenvSwitch
 
+Implemented using [tview](https://github.com/rivo/tview) (for graphics) and [goflow2](https://github.com/netsampler/goflow2) (for IPFIX collection).
+
+
 ## Building
 
     make
@@ -18,3 +21,5 @@ Start ovs IPFIX reporter
 
 Where `OVS_FLOWMON_IP` is any IP address ovn-flowmon is listening to (by default, any IP from that host)
 
+## Demo
+[![asciicast](https://asciinema.org/a/436320.svg)](https://asciinema.org/a/436320)
