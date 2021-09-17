@@ -1,12 +1,11 @@
 package main
 
 import (
-	"amorenoz/ovs-flowmon/pkg/flowmon"
 	"context"
-	"fmt"
 	"net/url"
 	"strconv"
-	"sync"
+
+	"amorenoz/ovs-flowmon/pkg/view"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/netsampler/goflow2/format"
@@ -19,196 +18,15 @@ import (
 )
 
 var (
-	tableView *tview.Table
-	flowTable *FlowTable
 	app       *tview.Application
-	started   bool = false
+	flowTable *view.FlowTable
 
-	fieldList  []string = []string{"InIf", "OutIf", "SrcMac", "DstMac", "VlanID", "Etype", "SrcAddr", "DstAddr", "Proto", "SrcPort", "DstPort", "FlowDirection"}
-	aggregates map[string]bool
+	started bool = false
+
+	fieldList []string = []string{"InIf", "OutIf", "SrcMac", "DstMac", "VlanID", "Etype", "SrcAddr", "DstAddr", "Proto", "SrcPort", "DstPort", "FlowDirection"}
 )
 
-type SelectMode int
-
-const ModeRows SelectMode = 0
-const ModeCols SelectMode = 1
-
-type FlowTable struct {
-	// mutex to protect aggregates (not flows)
-	mutex      sync.RWMutex
-	flows      []*flowmon.FlowInfo
-	aggregates []*flowmon.FlowAggregate
-	// Keeping both the list and the map for efficiency
-	aggregateKeyList []string
-	aggregateKeyMap  map[string]bool
-	keys             []string
-	view             *tview.Table
-	mode             SelectMode
-}
-
-func NewFlowTable(view *tview.Table) *FlowTable {
-	aggregateKeyList := []string{}
-	for _, field := range fieldList {
-		if aggregates[field] {
-			aggregateKeyList = append(aggregateKeyList, field)
-		}
-	}
-	// Initialize select mode
-	view.SetSelectable(true, false)
-	return &FlowTable{
-		mutex:            sync.RWMutex{},
-		flows:            make([]*flowmon.FlowInfo, 0),
-		aggregates:       make([]*flowmon.FlowAggregate, 0),
-		aggregateKeyList: aggregateKeyList,
-		aggregateKeyMap:  aggregates,
-		keys:             fieldList,
-		view:             view,
-	}
-}
-
-func (ft *FlowTable) UpdateKeys(aggregates map[string]bool) {
-	aggregateKeyList := []string{}
-	for _, field := range fieldList {
-		if aggregates[field] {
-			aggregateKeyList = append(aggregateKeyList, field)
-		}
-	}
-	ft.mutex.Lock()
-	defer ft.mutex.Unlock()
-	ft.aggregateKeyList = aggregateKeyList
-	ft.aggregateKeyMap = aggregates
-	// Need to recompute all aggregations
-	ft.aggregates = make([]*flowmon.FlowAggregate, 0)
-	for _, flow := range ft.flows {
-		ft.ProcessFlow(flow)
-	}
-}
-
-func (ft *FlowTable) SetSelectMode(mode SelectMode) {
-	switch mode {
-	case ModeRows:
-		tableView.SetSelectable(true, false)
-	case ModeCols:
-		tableView.SetSelectable(false, true)
-	}
-	ft.mode = mode
-	ft.Draw()
-}
-
-func (ft *FlowTable) Draw() {
-	var cell *tview.TableCell
-	// Draw Key
-	for col, key := range ft.keys {
-		cell = tview.NewTableCell(key).SetTextColor(tcell.ColorWhite).SetAlign(tview.AlignLeft).SetSelectable(ft.mode == ModeCols)
-		ft.view.SetCell(0, col, cell)
-	}
-
-	col := len(ft.keys)
-
-	cell = tview.NewTableCell("TotalBytes").
-		SetTextColor(tcell.ColorWhite).
-		SetAlign(tview.AlignLeft).
-		SetSelectable(false)
-	ft.view.SetCell(0, col, cell)
-	col += 1
-	cell = tview.NewTableCell("TotalPackets").
-		SetTextColor(tcell.ColorWhite).
-		SetAlign(tview.AlignLeft).
-		SetSelectable(false)
-	ft.view.SetCell(0, col, cell)
-	col += 1
-	cell = tview.NewTableCell("Rate(kbps)").
-		SetTextColor(tcell.ColorWhite).
-		SetAlign(tview.AlignLeft).
-		SetSelectable(false)
-	ft.view.SetCell(0, col, cell)
-	col += 1
-
-	ft.mutex.RLock()
-	defer ft.mutex.RUnlock()
-	for i, agg := range ft.aggregates {
-		for col, key := range fieldList {
-			var fieldStr string
-			var err error
-			if !ft.aggregateKeyMap[key] {
-				fieldStr = "-"
-			} else {
-				fieldStr, err = agg.GetFieldString(key)
-				if err != nil {
-					log.Error(err)
-					fieldStr = "err"
-				}
-			}
-			cell = tview.NewTableCell(fieldStr).SetTextColor(tcell.ColorWhite).SetAlign(tview.AlignLeft).SetSelectable(ft.mode == ModeRows)
-			ft.view.SetCell(1+i, col, cell)
-		}
-		col := len(ft.keys)
-
-		cell = tview.NewTableCell(fmt.Sprintf("%d", int(agg.TotalBytes))).
-			SetTextColor(tcell.ColorWhite).
-			SetAlign(tview.AlignLeft).
-			SetSelectable(false)
-		ft.view.SetCell(1+i, col, cell)
-		col += 1
-		cell = tview.NewTableCell(fmt.Sprintf("%d", int(agg.TotalPackets))).
-			SetTextColor(tcell.ColorWhite).
-			SetAlign(tview.AlignLeft).
-			SetSelectable(false)
-		ft.view.SetCell(1+i, col, cell)
-		col += 1
-
-		delta := "="
-		if agg.LastDeltaBps > 0 {
-			delta = "↑"
-		} else if agg.LastDeltaBps < 0 {
-			delta = "↓"
-		}
-		cell = tview.NewTableCell(fmt.Sprintf("%.1f %s", float64(agg.LastBps)/1000, delta)).
-			SetTextColor(tcell.ColorWhite).
-			SetAlign(tview.AlignLeft).
-			SetSelectable(false)
-
-		ft.view.SetCell(1+i, col, cell)
-		col += 1
-	}
-}
-
-func (ft *FlowTable) ProcessMessage(msg *flowmessage.FlowMessage) {
-	log.Debugf("Processing Flow Message: %+v", msg)
-
-	flowInfo := flowmon.NewFlowInfo(msg)
-	ft.flows = append(ft.flows, flowInfo)
-
-	ft.mutex.Lock()
-	defer ft.mutex.Unlock()
-	ft.ProcessFlow(flowInfo)
-}
-
-// Caller must hold mutex
-func (ft *FlowTable) ProcessFlow(flowInfo *flowmon.FlowInfo) {
-	var matched bool = false
-	var err error = nil
-	for _, agg := range ft.aggregates {
-		matched, err = agg.AppendIfMatches(flowInfo)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		if matched {
-			break
-		}
-	}
-	if !matched {
-		// Create new Aggregate for this flow
-		newAgg := flowmon.NewFlowAggregate(ft.aggregateKeyList)
-		if match, err := newAgg.AppendIfMatches(flowInfo); !match || err != nil {
-			log.Fatal(err)
-		}
-		ft.aggregates = append(ft.aggregates, newAgg)
-	}
-}
-
-func readFlows(flowTable *FlowTable) {
+func readFlows(flowTable *view.FlowTable) {
 	formatter, err := format.FindFormat(context.Background(), "pb")
 	if err != nil {
 		log.Fatal(err)
@@ -277,7 +95,7 @@ func readFlows(flowTable *FlowTable) {
 
 // Implements TransportDriver
 type Dispatcher struct {
-	flowTable *FlowTable
+	flowTable *view.FlowTable
 }
 
 func (d *Dispatcher) Prepare() error {
@@ -307,7 +125,7 @@ type Listener interface {
 }
 
 func main() {
-	aggregates = make(map[string]bool, 0)
+	aggregates := make(map[string]bool, 0)
 	for _, key := range fieldList {
 		aggregates[key] = true
 	}
@@ -319,10 +137,8 @@ func main() {
 		}
 		return event
 	})
-	tableView = tview.NewTable().
-		SetSelectable(true, false). // Allow flows to be selected
-		SetFixed(1, 1)              // Make it always focus the top left
-	flowTable = NewFlowTable(tableView)
+
+	flowTable = view.NewFlowTable(fieldList, aggregates)
 	status := tview.NewTextView().SetText("Stopped. Press Start to start capturing\n")
 	log.SetOutput(status)
 
@@ -338,7 +154,7 @@ func main() {
 			readFlows(flowTable)
 			started = true
 		}
-		app.SetFocus(tableView)
+		app.SetFocus(flowTable.View)
 	}
 	stop := func() {
 		log.Info("Stopping")
@@ -350,19 +166,11 @@ func main() {
 
 	show_aggregate := func() {
 		// Make columns selectable
-		flowTable.SetSelectMode(ModeCols)
-		app.SetFocus(tableView)
-		tableView.SetSelectedFunc(func(row, col int) {
-			colName := tableView.GetCell(0, col).Text
-			// Toggle aggregate and update flow table
-			aggregates[colName] = !aggregates[colName]
-			flowTable.UpdateKeys(aggregates)
-			tableView.Clear()
-			flowTable.Draw()
-
-			// Restore selectable mode and SelectedFunc
-			flowTable.SetSelectMode(ModeRows)
-			tableView.SetSelectedFunc(func(row, col int) {
+		flowTable.SetSelectMode(view.ModeCols)
+		app.SetFocus(flowTable.View)
+		flowTable.View.SetSelectedFunc(func(row, col int) {
+			flowTable.ToggleAggregate(col)
+			flowTable.View.SetSelectedFunc(func(row, col int) {
 				app.SetFocus(menuList)
 			})
 			app.SetFocus(menuList)
@@ -374,20 +182,20 @@ func main() {
 		AddItem("Logs", "", 'l', logs).
 		AddItem("Add/Remove Fields from aggregate", "", 'a', show_aggregate)
 	menuList.SetBorderPadding(1, 1, 2, 2)
-	tableView.SetDoneFunc(func(key tcell.Key) {
+	flowTable.View.SetDoneFunc(func(key tcell.Key) {
 		app.SetFocus(menuList)
 	})
-	tableView.SetSelectedFunc(func(row, col int) {
+	flowTable.View.SetSelectedFunc(func(row, col int) {
 		app.SetFocus(menuList)
 	})
 	status.SetDoneFunc(func(key tcell.Key) {
 		app.SetFocus(menuList)
 	})
 	menu.SetBorder(true).SetBorderPadding(1, 1, 2, 0).SetTitle("Menu")
-	tableView.SetBorder(true).SetBorderPadding(1, 1, 2, 0).SetTitle("Flows")
+	flowTable.View.SetBorder(true).SetBorderPadding(1, 1, 2, 0).SetTitle("Flows")
 	status.SetBorder(true).SetBorderPadding(1, 1, 2, 0).SetTitle("Logs")
 
-	flex := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(menu, 0, 2, true).AddItem(tableView, 0, 5, false).AddItem(status, 0, 1, false)
+	flex := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(menu, 0, 2, true).AddItem(flowTable.View, 0, 5, false).AddItem(status, 0, 1, false)
 
 	app.SetRoot(flex, true).SetFocus(flex)
 
