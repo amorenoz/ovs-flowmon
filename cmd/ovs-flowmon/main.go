@@ -174,6 +174,21 @@ func main() {
 		app.SetFocus(flowTable.View)
 		flowTable.View.SetSelectedFunc(func(row, col int) {
 			flowTable.ToggleAggregate(col)
+			flowTable.SetSelectMode(view.ModeRows)
+			flowTable.View.SetSelectedFunc(func(row, col int) {
+				app.SetFocus(menuList)
+			})
+			app.SetFocus(menuList)
+		})
+	}
+
+	sort_by := func() {
+		// Make columns selectable
+		flowTable.SetSelectMode(view.ModeCols)
+		app.SetFocus(flowTable.View)
+		flowTable.View.SetSelectedFunc(func(row, col int) {
+			flowTable.SetSortingColumn(col)
+			flowTable.SetSelectMode(view.ModeRows)
 			flowTable.View.SetSelectedFunc(func(row, col int) {
 				app.SetFocus(menuList)
 			})
@@ -185,7 +200,8 @@ func main() {
 		AddItem("Stop", "", 't', stop).
 		AddItem("Flows", "", 'f', flows).
 		AddItem("Logs", "", 'l', logs).
-		AddItem("Add/Remove Fields from aggregate", "", 'a', show_aggregate)
+		AddItem("Add/Remove Fields from aggregate", "", 'a', show_aggregate).
+		AddItem("Sort by ", "", 's', sort_by)
 	flowTable.View.SetDoneFunc(func(key tcell.Key) {
 		app.SetFocus(menuList)
 	})
