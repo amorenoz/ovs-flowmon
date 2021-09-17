@@ -210,13 +210,16 @@ func (ft *FlowTable) ProcessMessage(msg *flowmessage.FlowMessage) {
 func (ft *FlowTable) ProcessFlow(flowInfo *flowmon.FlowInfo) {
 	var matched bool = false
 	var err error = nil
-	for _, agg := range ft.aggregates {
+	for i, agg := range ft.aggregates {
 		matched, err = agg.AppendIfMatches(flowInfo)
 		if err != nil {
 			log.Error(err)
 			return
 		}
 		if matched {
+			// Re-insert the matched aggregate
+			ft.aggregates = append(ft.aggregates[:i], ft.aggregates[i+1:]...)
+			ft.insertSortedAggregate(agg)
 			break
 		}
 	}
@@ -228,15 +231,19 @@ func (ft *FlowTable) ProcessFlow(flowInfo *flowmon.FlowInfo) {
 		}
 
 		// Sorted insertion
-		insertionPoint := sort.Search(len(ft.aggregates), func(i int) bool {
-			return ft.lessFunc(newAgg, ft.aggregates[i])
-		})
-		if insertionPoint == len(ft.aggregates) {
-			ft.aggregates = append(ft.aggregates, newAgg)
-		} else {
-			ft.aggregates = append(ft.aggregates[0:insertionPoint],
-				append([]*flowmon.FlowAggregate{newAgg}, ft.aggregates[insertionPoint:]...)...)
-		}
+		ft.insertSortedAggregate(newAgg)
+	}
+}
+
+func (ft *FlowTable) insertSortedAggregate(agg *flowmon.FlowAggregate) {
+	insertionPoint := sort.Search(len(ft.aggregates), func(i int) bool {
+		return ft.lessFunc(agg, ft.aggregates[i])
+	})
+	if insertionPoint == len(ft.aggregates) {
+		ft.aggregates = append(ft.aggregates, agg)
+	} else {
+		ft.aggregates = append(ft.aggregates[0:insertionPoint],
+			append([]*flowmon.FlowAggregate{agg}, ft.aggregates[insertionPoint:]...)...)
 	}
 }
 
@@ -253,7 +260,7 @@ func (ft *FlowTable) SetSortingKey(key string) error {
 		ft.lessFunc = func(one, other *flowmon.FlowAggregate) bool {
 			return one.LastTimeReceived < other.LastTimeReceived
 		}
-	case "LastBps":
+	case "Rate(kbps)":
 		ft.lessFunc = func(one, other *flowmon.FlowAggregate) bool {
 			return one.LastBps < other.LastBps
 		}
@@ -265,6 +272,7 @@ func (ft *FlowTable) SetSortingKey(key string) error {
 		ft.lessFunc = func(one, other *flowmon.FlowAggregate) bool {
 			return one.TotalBytes < other.TotalBytes
 		}
+
 	default:
 		found := false
 		for _, k := range ft.keys {
