@@ -2,9 +2,14 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
+	"net"
 	"net/url"
 	"strconv"
+	"strings"
 
+	"amorenoz/ovs-flowmon/pkg/ovs"
 	"amorenoz/ovs-flowmon/pkg/view"
 
 	"github.com/gdamore/tcell/v2"
@@ -20,10 +25,14 @@ import (
 var (
 	app       *tview.Application
 	flowTable *view.FlowTable
+	ovsClient *ovs.OVSClient
 
 	started bool = false
 
 	fieldList []string = []string{"InIf", "OutIf", "SrcMac", "DstMac", "VlanID", "Etype", "SrcAddr", "DstAddr", "Proto", "SrcPort", "DstPort", "FlowDirection"}
+	ovsdb              = flag.String("ovsdb", "", "Enable OVS configuration by providing a database string, e.g: unix:/var/run/openvswitch/db.sock")
+	iface              = flag.String("iface", "", "Interface name where to listen. If ovsdb configuration is enabled"+
+		"The IPv4 address of this interface will be used as target, so make sure the remote vswitchd can reach it")
 )
 
 func readFlows(flowTable *view.FlowTable) {
@@ -36,6 +45,14 @@ func readFlows(flowTable *view.FlowTable) {
 	}
 	Workers := 1
 	ReusePort := false
+
+	ipAddress := ""
+	if *ovsdb != "" {
+		ipAddress = ipAddressFromOvsdb(*ovsdb)
+	}
+	log.Info(ipAddress)
+	listen := "netflow://" + ipAddress + ":2055"
+
 	// wg.Add(1)
 	go func(listenAddress string) {
 		listenAddrUrl, err := url.Parse(listenAddress)
@@ -56,7 +73,7 @@ func readFlows(flowTable *view.FlowTable) {
 			"port":     port,
 		}
 
-		log.WithFields(logFields).Info("Starting collection")
+		log.WithFields(logFields).Info("Starting collection on " + listenAddress)
 
 		if listenAddrUrl.Scheme == "sflow" {
 			sSFlow := &utils.StateSFlow{
@@ -88,7 +105,7 @@ func readFlows(flowTable *view.FlowTable) {
 			log.WithFields(logFields).Fatal(err)
 		}
 
-	}("netflow://:2055")
+	}(listen)
 
 	// wg.Wait()
 }
@@ -124,20 +141,26 @@ type Listener interface {
 	OnNewFlow(flow *flowmessage.FlowMessage)
 }
 
-func main() {
+func ipAddressFromOvsdb(ovsdb string) string {
+	parts := strings.Split(ovsdb, ":")
+	switch parts[0] {
+	case "tcp":
+		conn, err := net.Dial("tcp", strings.Join(parts[1:], ":"))
+		if err != nil {
+			panic(err)
+		}
+		return strings.Split(conn.LocalAddr().String(), ":")[0]
+	case "unix":
+		return "127.0.0.1"
+	}
+	return ""
+}
+
+func mainPage(pages *tview.Pages) {
 	aggregates := make(map[string]bool, 0)
 	for _, key := range fieldList {
 		aggregates[key] = true
 	}
-	app = tview.NewApplication()
-	//pages := tview.NewPages()
-	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyCtrlC {
-			app.Stop()
-		}
-		return event
-	})
-
 	flowTable = view.NewFlowTable(fieldList, aggregates)
 	status := tview.NewTextView().SetText("Stopped. Press Start to start capturing\n")
 	log.SetOutput(status)
@@ -157,9 +180,11 @@ func main() {
 		}
 		app.SetFocus(flowTable.View)
 	}
+	config := func() {
+		pages.ShowPage("config")
+	}
 	stop := func() {
-		log.Info("Stopping")
-		app.Stop()
+		stop()
 	}
 	logs := func() {
 		app.SetFocus(status)
@@ -199,8 +224,11 @@ func main() {
 		})
 	}
 
-	menuList.AddItem("Start", "", 's', start).
-		AddItem("Stop", "", 't', stop).
+	menuList.AddItem("Start", "", 's', start)
+	if *ovsdb != "" {
+		menuList.AddItem("Config", "", 'c', config)
+	}
+	menuList.AddItem("Stop", "", 't', stop).
 		AddItem("Flows", "", 'f', flows).
 		AddItem("Logs", "", 'l', logs).
 		AddItem("Add/Remove Fields from aggregate", "", 'a', show_aggregate).
@@ -221,7 +249,94 @@ func main() {
 
 	flex := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(menu, 0, 2, true).AddItem(flowTable.View, 0, 5, false).AddItem(status, 0, 1, false)
 
-	app.SetRoot(flex, true).SetFocus(flex)
+	pages.AddPage("main", flex, true, true)
+}
+
+func center(p tview.Primitive, width, height int) tview.Primitive {
+	return tview.NewFlex().
+		AddItem(nil, 0, 1, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(p, height, 1, true).
+			AddItem(nil, 0, 1, false), width, 1, true).
+		AddItem(nil, 0, 1, false)
+}
+func configPage(pages *tview.Pages) {
+	var err error
+	if *ovsdb == "" {
+		return
+	}
+	// Initialize OVS Configuration client
+	target := ipAddressFromOvsdb(*ovsdb) + ":2055"
+	ovsClient, err = ovs.NewOVSClient(*ovsdb)
+	if err != nil {
+		fmt.Print(err)
+		log.Fatal(err)
+	}
+
+	sampling := 400
+	bridge := "br-int"
+	form := tview.NewForm()
+	form.SetTitle("OVS Configuration").SetBorder(true)
+	form.AddDropDown("Bridge", []string{"br-int"}, 0, func(option string, _ int) {
+		bridge = option
+	}). // TODO: Add more
+		AddInputField("Sampling", "400", 3, func(textToCheck string, _ rune) bool {
+			_, err := strconv.ParseInt(textToCheck, 0, 32)
+			return err == nil
+		}, func(text string) {
+			intVal, err := strconv.ParseInt(text, 0, 32)
+			if err == nil {
+				sampling = int(intVal)
+			}
+		}).
+		AddButton("Save", func() {
+			err := ovsClient.SetIPFIX(bridge, target, sampling, ovs.DefaultCacheMax, ovs.DefaultActiveTimeout)
+			if err != nil {
+				log.Error("Failed to set OVS configuration")
+				log.Error(err)
+			} else {
+				log.Info("OVS configuration changed")
+			}
+			pages.HidePage("config")
+		}).
+		AddButton("Cancel", func() {
+			pages.HidePage("config")
+		})
+	// TODO add cache and
+	pages.AddPage("config", center(form, 40, 10), true, false)
+}
+
+func stop() {
+	log.Info("Stopping")
+	if ovsClient != nil {
+		log.Info("Stopping IPFIX exporter")
+		err := ovsClient.Close()
+		if err != nil {
+			log.Error(err)
+			fmt.Print(err)
+		}
+	}
+	if app != nil {
+		app.Stop()
+	}
+}
+
+func main() {
+	flag.Parse()
+	app = tview.NewApplication()
+	pages := tview.NewPages()
+	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyCtrlC {
+			stop()
+		}
+		return event
+	})
+
+	mainPage(pages)
+	configPage(pages)
+
+	app.SetRoot(pages, true).SetFocus(pages)
 
 	if err := app.Run(); err != nil {
 		panic(err)
