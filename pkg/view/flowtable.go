@@ -2,6 +2,7 @@ package view
 
 import (
 	"amorenoz/ovs-flowmon/pkg/flowmon"
+	"amorenoz/ovs-flowmon/pkg/stats"
 	"fmt"
 	"sort"
 	"sync"
@@ -18,9 +19,11 @@ const ModeRows SelectMode = 0     // Only Rows are selectable
 const ModeColsAll SelectMode = 1  // All Columns are selectable
 const ModeColsKeys SelectMode = 2 // Only Flow Key columns are selectable
 
+const ProcessedMessagesStat string = "Processed Messages"
+
 type FlowTable struct {
-	View      *tview.Table
-	StatsView *tview.Table
+	View  *tview.Table
+	stats stats.StatsBackend
 	// mutex to protect aggregates (not flows)
 	mutex sync.RWMutex
 
@@ -40,7 +43,7 @@ type FlowTable struct {
 	nMessages int
 }
 
-func NewFlowTable(fields []string, aggregates map[string]bool) *FlowTable {
+func NewFlowTable(fields []string, aggregates map[string]bool, statsBackend stats.StatsBackend) *FlowTable {
 	aggregateKeyList := []string{}
 	for _, field := range fields {
 		if aggregates[field] {
@@ -52,13 +55,13 @@ func NewFlowTable(fields []string, aggregates map[string]bool) *FlowTable {
 		SetFixed(1, 1).             // Make it always focus the top left
 		SetSelectable(true, false)  // Start in RowMode
 
-	stats := tview.NewTable().
-		SetCell(0, 0, tview.NewTableCell("Processed Messages: ")).
-		SetCell(0, 1, tview.NewTableCell(fmt.Sprintf("%d", 0)))
+	if statsBackend != nil {
+		statsBackend.RegisterStat(ProcessedMessagesStat)
+	}
 
 	return &FlowTable{
 		View:             tableView,
-		StatsView:        stats,
+		stats:            statsBackend,
 		mutex:            sync.RWMutex{},
 		flows:            make([]*flowmon.FlowInfo, 0),
 		aggregates:       make([]*flowmon.FlowAggregate, 0),
@@ -190,8 +193,8 @@ func (ft *FlowTable) Draw() {
 		ft.View.SetCell(1+i, col, cell)
 		col += 1
 	}
-	// Draw Stats
-	ft.StatsView.SetCell(0, 1, tview.NewTableCell(fmt.Sprintf("%d", ft.nMessages)))
+	ft.stats.UpdateStat(ProcessedMessagesStat, fmt.Sprintf("%d", ft.nMessages))
+	ft.stats.Draw()
 }
 
 func (ft *FlowTable) ProcessMessage(msg *flowmessage.FlowMessage) {
