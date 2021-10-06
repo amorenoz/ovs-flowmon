@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"amorenoz/ovs-flowmon/pkg/ovs"
+	"amorenoz/ovs-flowmon/pkg/stats"
 	"amorenoz/ovs-flowmon/pkg/view"
 
 	"github.com/gdamore/tcell/v2"
@@ -23,9 +24,10 @@ import (
 )
 
 var (
-	app       *tview.Application
-	flowTable *view.FlowTable
-	ovsClient *ovs.OVSClient
+	app         *tview.Application
+	flowTable   *view.FlowTable
+	statsViewer *stats.StatsView
+	ovsClient   *ovs.OVSClient
 
 	started bool = false
 
@@ -161,7 +163,8 @@ func mainPage(pages *tview.Pages) {
 	for _, key := range fieldList {
 		aggregates[key] = true
 	}
-	flowTable = view.NewFlowTable(fieldList, aggregates)
+	statsViewer = stats.NewStatsView(app)
+	flowTable = view.NewFlowTable(fieldList, aggregates, statsViewer)
 	status := tview.NewTextView().SetText("Stopped. Press Start to start capturing\n")
 	log.SetOutput(status)
 
@@ -170,7 +173,7 @@ func mainPage(pages *tview.Pages) {
 	menuList := tview.NewList().
 		ShowSecondaryText(false)
 	menu.AddItem(menuList, 0, 2, true)
-	menu.AddItem(flowTable.StatsView, 0, 2, false)
+	menu.AddItem(statsViewer.View(), 0, 2, false)
 
 	start := func() {
 		log.Info("Started flow processing")
@@ -245,7 +248,6 @@ func mainPage(pages *tview.Pages) {
 	menuList.SetBorder(true).SetBorderPadding(1, 1, 2, 0).SetTitle("Menu")
 	flowTable.View.SetBorder(true).SetBorderPadding(1, 1, 2, 0).SetTitle("Flows")
 	status.SetBorder(true).SetBorderPadding(1, 1, 2, 0).SetTitle("Logs")
-	flowTable.StatsView.SetBorder(true).SetBorderPadding(1, 1, 2, 0).SetTitle("Stats")
 
 	flex := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(menu, 0, 2, true).AddItem(flowTable.View, 0, 5, false).AddItem(status, 0, 1, false)
 
@@ -268,7 +270,12 @@ func configPage(pages *tview.Pages) {
 	}
 	// Initialize OVS Configuration client
 	target := ipAddressFromOvsdb(*ovsdb) + ":2055"
-	ovsClient, err = ovs.NewOVSClient(*ovsdb)
+	ovsClient, err = ovs.NewOVSClient(*ovsdb, statsViewer)
+	if err != nil {
+		fmt.Print(err)
+		log.Fatal(err)
+	}
+	ovsClient.EnableStatistics()
 	if err != nil {
 		fmt.Print(err)
 		log.Fatal(err)
