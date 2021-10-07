@@ -168,8 +168,14 @@ func (o *OVSClient) SetIPFIX(bridgeName, target string, sampling, cacheMax, cach
 		return err
 	}
 	ops := append(insertOps, updateOps...)
-	log.Info(ops)
 	response, err = o.client.Transact(context.TODO(), ops...)
+	logFields := log.Fields{
+		"operation": ops,
+		"response":  response,
+		"err":       err,
+	}
+	log.WithFields(logFields).Debug("OVS IPFIX Configuration")
+
 	if err != nil {
 		return err
 	}
@@ -229,6 +235,12 @@ func (o *OVSClient) EnableStatistics() error {
 		return err
 	}
 	response, err := o.client.Transact(context.TODO(), mutateOps...)
+	logFields := log.Fields{
+		"operation": mutateOps,
+		"response":  response,
+		"err":       err,
+	}
+	log.WithFields(logFields).Debug("OVS Statistics Enabling")
 	if err != nil {
 		log.Error(err)
 	}
@@ -265,6 +277,12 @@ func (o *OVSClient) DisableStatistics() error {
 		return err
 	}
 	response, err := o.client.Transact(context.TODO(), mutateOps...)
+	logFields := log.Fields{
+		"operation": mutateOps,
+		"response":  response,
+		"err":       err,
+	}
+	log.WithFields(logFields).Debug("OVS Statistics Enabling")
 	if err != nil {
 		log.Error(err)
 	}
@@ -275,7 +293,12 @@ func (o *OVSClient) DisableStatistics() error {
 }
 
 func (o *OVSClient) updateStatistics(old_statistics, statistics map[string]string) {
-	log.Info(statistics)
+	logFields := log.Fields{
+		"old": old_statistics,
+		"new": statistics,
+	}
+	log.WithFields(logFields).Debug("Updating Statistics")
+
 	if cpu, ok := statistics["cpu"]; ok {
 		o.stats.UpdateStat(statNames["cpu"], cpu)
 	}
@@ -300,8 +323,6 @@ func (o *OVSClient) updateStatistics(old_statistics, statistics map[string]strin
 
 func (o *OVSClient) updateProcessStatistics(old_statistics, statistics map[string]string) {
 	var virt, rss, cpu, total, old_cpu, old_total int64
-	log.Info(old_statistics)
-	log.Info(statistics)
 	ovs, ok := statistics["process_ovs-vswitchd"]
 	ovs_stats := strings.Split(ovs, ",")
 
