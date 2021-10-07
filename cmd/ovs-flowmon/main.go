@@ -35,6 +35,7 @@ var (
 	ovsdb              = flag.String("ovsdb", "", "Enable OVS configuration by providing a database string, e.g: unix:/var/run/openvswitch/db.sock")
 	iface              = flag.String("iface", "", "Interface name where to listen. If ovsdb configuration is enabled"+
 		"The IPv4 address of this interface will be used as target, so make sure the remote vswitchd can reach it")
+	logLevel = flag.String("loglevel", "info", "Log level")
 )
 
 func readFlows(flowTable *view.FlowTable) {
@@ -52,8 +53,8 @@ func readFlows(flowTable *view.FlowTable) {
 	if *ovsdb != "" {
 		ipAddress = ipAddressFromOvsdb(*ovsdb)
 	}
-	log.Info(ipAddress)
 	listen := "netflow://" + ipAddress + ":2055"
+	log.Infof("Listening on %s", listen)
 
 	// wg.Add(1)
 	go func(listenAddress string) {
@@ -331,6 +332,9 @@ func stop() {
 
 func main() {
 	flag.Parse()
+	lvl, _ := log.ParseLevel(*logLevel)
+	log.SetLevel(lvl)
+
 	app = tview.NewApplication()
 	pages := tview.NewPages()
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
