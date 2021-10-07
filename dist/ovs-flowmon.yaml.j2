@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ovs-flowmon-{{ node }}
+spec:
+  hostNetwork: true
+  containers:
+  - name: ovs-flowmon
+    image: {{ image }}
+    volumeMounts:
+    - mountPath: /var/run/openvswitch
+      name: host-var-run-ovs
+      readOnly: false
+  volumes:
+    - name: host-var-run-ovs
+      hostPath:
+        path: /var/run/openvswitch
+  nodeSelector:
+    flowmon: "true"

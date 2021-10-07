@@ -9,17 +9,24 @@ Implemented using [tview](https://github.com/rivo/tview) (for graphics) and [gof
     make
 
 ## Usage
+
+### Locally
 Start the ovn-flowmon daemon
 
     ./build/ovn-flowmon
 
-(The tui will ask you to press 'Enter' on the 'Start' button)
 
-Start ovs IPFIX reporter
+### Kubernetes
 
-    ovs-vsctl -- set Bridge br-int ipfix=@i -- --id=@i create IPFIX targets=\"OVS_FLOWMON_IP:2055\"
+Use the deploy script to deploy the monitor in the node you want to monitor:
 
-Where `OVS_FLOWMON_IP` is any IP address ovn-flowmon is listening to (by default, any IP from that host)
+    ./deploy.sh [ -i NON_DEFAULT_IMAGE ] NODE_NAME
+
+
+To clean the deployment simply delete the ovs-flowmon pod:
+
+    kubectl delete pod ovn-flowmon-${NODE_NAME}
+
 
 ## Demo
-[![asciicast](https://asciinema.org/a/436320.svg)](https://asciinema.org/a/436320)
+[![asciicast](https://asciinema.org/a/440615.svg)](https://asciinema.org/a/440615)
