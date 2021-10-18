@@ -240,7 +240,7 @@ func (ft *FlowTable) ProcessFlow(flowInfo *flowmon.FlowInfo) {
 
 func (ft *FlowTable) insertSortedAggregate(agg *flowmon.FlowAggregate) {
 	insertionPoint := sort.Search(len(ft.aggregates), func(i int) bool {
-		return ft.lessFunc(agg, ft.aggregates[i])
+		return ft.lessFunc(ft.aggregates[i], agg)
 	})
 	if insertionPoint == len(ft.aggregates) {
 		ft.aggregates = append(ft.aggregates, agg)
