@@ -13,7 +13,7 @@ Implemented using [tview](https://github.com/rivo/tview) (for graphics) and [gof
 ### Locally
 Start the ovn-flowmon daemon
 
-    ./build/ovn-flowmon
+    ./build/ovs-flowmon
 
 
 ### Kubernetes
@@ -25,7 +25,7 @@ Use the deploy script to deploy the monitor in the node you want to monitor:
 
 To clean the deployment simply delete the ovs-flowmon pod:
 
-    kubectl delete pod ovn-flowmon-${NODE_NAME}
+    kubectl delete pod -l app=ovs-flowmon
 
 
 ## Demo
