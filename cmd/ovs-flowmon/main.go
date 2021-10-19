@@ -159,12 +159,29 @@ func ipAddressFromOvsdb(ovsdb string) string {
 	return ""
 }
 
+func smallHelpView() tview.Primitive {
+	return tview.NewTextView().SetText(`
+
+Welcome to OvS Flow Monitor!
+
+First press "Start Collector" to start the flow collector.
+Then, press "Config Exporter" to configure the IPFIX flow exporter in OvS.
+
+If you have configured the exporter before starting the collector, flows will not appear for the next 10 minutes.
+Reconfigure the exporter to make the flows appear inmediately.
+
+If you don't see the "Configure Exporter" button, it means we did not find an OvS configuration socket. Please configure the IPFIX exporter manually.
+
+`)
+}
+
 func mainPage(pages *tview.Pages) {
 	aggregates := make(map[string]bool, 0)
 	for _, key := range fieldList {
 		aggregates[key] = true
 	}
 	statsViewer = stats.NewStatsView(app)
+	help := smallHelpView()
 	flowTable = view.NewFlowTable(fieldList, aggregates, statsViewer)
 	status := tview.NewTextView().SetText("Stopped. Press Start to start capturing\n")
 	log.SetOutput(status)
@@ -174,15 +191,17 @@ func mainPage(pages *tview.Pages) {
 	menuList := tview.NewList().
 		ShowSecondaryText(false)
 	menu.AddItem(menuList, 0, 2, true)
-	menu.AddItem(statsViewer.View(), 0, 2, false)
+	//menu.AddItem(statsViewer.View(), 0, 2, false)
+	menu.AddItem(help, 0, 2, false)
 
 	start := func() {
 		log.Info("Started flow processing")
 		if !started {
+			menu.RemoveItem(help)
+			menu.AddItem(statsViewer.View(), 0, 2, false)
 			readFlows(flowTable)
 			started = true
 		}
-		app.SetFocus(flowTable.View)
 	}
 	config := func() {
 		pages.ShowPage("config")
@@ -228,15 +247,16 @@ func mainPage(pages *tview.Pages) {
 		})
 	}
 
-	menuList.AddItem("Start", "", 'S', start)
+	menuList.AddItem("Start IPFIX Collector", "", 'S', start)
 	if *ovsdb != "" {
-		menuList.AddItem("Config", "", 'c', config)
+		menuList.AddItem("Configure IPFIX Exporter", "", 'c', config)
 	}
-	menuList.AddItem("Stop", "", 't', stop).
-		AddItem("Flows", "", 'f', flows).
-		AddItem("Logs", "", 'l', logs).
+	menuList.AddItem("Flows", "", 'f', flows).
 		AddItem("Add/Remove Fields from aggregate", "", 'a', show_aggregate).
-		AddItem("Sort by ", "", 's', sort_by)
+		AddItem("Sort by ", "", 's', sort_by).
+		AddItem("Logs", "", 'l', logs).
+		AddItem("Exit", "", 'e', stop)
+
 	flowTable.View.SetDoneFunc(func(key tcell.Key) {
 		app.SetFocus(menuList)
 	})
@@ -285,11 +305,10 @@ func configPage(pages *tview.Pages) {
 	sampling := 400
 	bridge := "br-int"
 	form := tview.NewForm()
-	form.SetTitle("OVS Configuration").SetBorder(true)
 	form.AddDropDown("Bridge", []string{"br-int"}, 0, func(option string, _ int) {
 		bridge = option
 	}). // TODO: Add more
-		AddInputField("Sampling", "400", 3, func(textToCheck string, _ rune) bool {
+		AddInputField("Sampling", "400", 5, func(textToCheck string, _ rune) bool {
 			_, err := strconv.ParseInt(textToCheck, 0, 32)
 			return err == nil
 		}, func(text string) {
@@ -311,8 +330,19 @@ func configPage(pages *tview.Pages) {
 		AddButton("Cancel", func() {
 			pages.HidePage("config")
 		})
-	// TODO add cache and
-	pages.AddPage("config", center(form, 40, 10), true, false)
+	// TODO add cache size, etc
+	configMenu := tview.NewFlex()
+	configMenu.SetTitle("OVS Configuration").SetBorder(true)
+	configMenu.SetDirection(tview.FlexRow).AddItem(tview.NewTextView().SetText(`Configure OvS IPFIX Exporter
+
+Use <Tab> to move around the form
+Press <Save> to save the configuration
+Press <Cancel> to go back to the main menu
+
+
+`), 0, 1, false).
+		AddItem(form, 0, 2, true)
+	pages.AddPage("config", center(configMenu, 60, 20), true, false)
 }
 
 func stop() {
