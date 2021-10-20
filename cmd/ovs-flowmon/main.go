@@ -29,8 +29,6 @@ var (
 	statsViewer *stats.StatsView
 	ovsClient   *ovs.OVSClient
 
-	started bool = false
-
 	fieldList []string = []string{"InIf", "OutIf", "SrcMac", "DstMac", "VlanID", "Etype", "SrcAddr", "DstAddr", "Proto", "SrcPort", "DstPort", "FlowDirection"}
 	ovsdb              = flag.String("ovsdb", "", "Enable OVS configuration by providing a database string, e.g: unix:/var/run/openvswitch/db.sock")
 	iface              = flag.String("iface", "", "Interface name where to listen. If ovsdb configuration is enabled"+
@@ -159,20 +157,22 @@ func ipAddressFromOvsdb(ovsdb string) string {
 	return ""
 }
 
-func smallHelpView() tview.Primitive {
-	return tview.NewTextView().SetText(`
+func welcomePage(pages *tview.Pages) {
+	welcome := tview.NewModal().SetText(`
 
 Welcome to OvS Flow Monitor!
 
-First press "Start Collector" to start the flow collector.
-Then, press "Config Exporter" to configure the IPFIX flow exporter in OvS.
+If an OvS vSwitch is present, you can start, stop and reconfigure the IPFIX Exporter from the main menu. If not, please start an IPFIX Exporter that sends flows to tcp::2055.
 
-If you have configured the exporter before starting the collector, flows will not appear for the next 10 minutes.
-Reconfigure the exporter to make the flows appear inmediately.
+Note that if you had already started the IPFIX exporter, it might take some time (e.g: 10mins in OvS) before it sends us the Templates, without which we cannot
+decode the IPFIX Flow Records. It is possible that re-starting the exporter helps.
 
-If you don't see the "Configure Exporter" button, it means we did not find an OvS configuration socket. Please configure the IPFIX exporter manually.
 
-`)
+`).AddButtons([]string{"Start"}).SetDoneFunc(func(index int, label string) {
+		pages.HidePage("welcome")
+		pages.ShowPage("main")
+	})
+	pages.AddPage("welcome", welcome, true, true)
 }
 
 func mainPage(pages *tview.Pages) {
@@ -181,7 +181,6 @@ func mainPage(pages *tview.Pages) {
 		aggregates[key] = true
 	}
 	statsViewer = stats.NewStatsView(app)
-	help := smallHelpView()
 	flowTable = view.NewFlowTable(fieldList, aggregates, statsViewer)
 	status := tview.NewTextView().SetText("Stopped. Press Start to start capturing\n")
 	log.SetOutput(status)
@@ -191,23 +190,10 @@ func mainPage(pages *tview.Pages) {
 	menuList := tview.NewList().
 		ShowSecondaryText(false)
 	menu.AddItem(menuList, 0, 2, true)
-	//menu.AddItem(statsViewer.View(), 0, 2, false)
-	menu.AddItem(help, 0, 2, false)
+	menu.AddItem(statsViewer.View(), 0, 2, false)
 
-	start := func() {
-		log.Info("Started flow processing")
-		if !started {
-			menu.RemoveItem(help)
-			menu.AddItem(statsViewer.View(), 0, 2, false)
-			readFlows(flowTable)
-			started = true
-		}
-	}
-	config := func() {
-		pages.ShowPage("config")
-	}
-	stop := func() {
-		stop()
+	exit := func() {
+		exit()
 	}
 	logs := func() {
 		app.SetFocus(status)
@@ -247,16 +233,22 @@ func mainPage(pages *tview.Pages) {
 		})
 	}
 
-	menuList.AddItem("Start IPFIX Collector", "", 'S', start)
 	if *ovsdb != "" {
-		menuList.AddItem("Configure IPFIX Exporter", "", 'c', config)
+		menuList.AddItem("Start OvS IPFIX Exporter", "", 's', func() {
+			ovs_start("br-int", ovs.DefaultSampling, ovs.DefaultCacheMax, ovs.DefaultActiveTimeout)
+		})
+		menuList.AddItem("(Re)Configure OvS IPFIX Exporter", "", 'c', func() {
+			pages.ShowPage("config")
+		})
+		menuList.AddItem("Stop OvS IPFIX Exporter", "", 't', func() {
+			ovs_stop()
+		})
 	}
 	menuList.AddItem("Flows", "", 'f', flows).
 		AddItem("Add/Remove Fields from aggregate", "", 'a', show_aggregate).
 		AddItem("Sort by ", "", 's', sort_by).
 		AddItem("Logs", "", 'l', logs).
-		AddItem("Exit", "", 'e', stop)
-
+		AddItem("Exit", "", 'e', exit)
 	flowTable.View.SetDoneFunc(func(key tcell.Key) {
 		app.SetFocus(menuList)
 	})
@@ -272,7 +264,8 @@ func mainPage(pages *tview.Pages) {
 
 	flex := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(menu, 0, 2, true).AddItem(flowTable.View, 0, 5, false).AddItem(status, 0, 1, false)
 
-	pages.AddPage("main", flex, true, true)
+	readFlows(flowTable)
+	pages.AddPage("main", flex, true, false)
 }
 
 func center(p tview.Primitive, width, height int) tview.Primitive {
@@ -290,13 +283,7 @@ func configPage(pages *tview.Pages) {
 		return
 	}
 	// Initialize OVS Configuration client
-	target := ipAddressFromOvsdb(*ovsdb) + ":2055"
 	ovsClient, err = ovs.NewOVSClient(*ovsdb, statsViewer)
-	if err != nil {
-		fmt.Print(err)
-		log.Fatal(err)
-	}
-	ovsClient.EnableStatistics()
 	if err != nil {
 		fmt.Print(err)
 		log.Fatal(err)
@@ -318,13 +305,7 @@ func configPage(pages *tview.Pages) {
 			}
 		}).
 		AddButton("Save", func() {
-			err := ovsClient.SetIPFIX(bridge, target, sampling, ovs.DefaultCacheMax, ovs.DefaultActiveTimeout)
-			if err != nil {
-				log.Error("Failed to set OVS configuration")
-				log.Error(err)
-			} else {
-				log.Info("OVS configuration changed")
-			}
+			ovs_start(bridge, sampling, ovs.DefaultCacheMax, ovs.DefaultActiveTimeout)
 			pages.HidePage("config")
 		}).
 		AddButton("Cancel", func() {
@@ -345,16 +326,42 @@ Press <Cancel> to go back to the main menu
 	pages.AddPage("config", center(configMenu, 60, 20), true, false)
 }
 
-func stop() {
-	log.Info("Stopping")
+func ovs_stop() {
 	if ovsClient != nil {
 		log.Info("Stopping IPFIX exporter")
 		err := ovsClient.Close()
 		if err != nil {
 			log.Error(err)
-			fmt.Print(err)
 		}
 	}
+}
+
+func ovs_start(bridge string, sampling, cacheMax, cacheTimeout int) {
+	if !ovsClient.Started() {
+		err := ovsClient.Start()
+		if err != nil {
+			log.Error("OVSDB not configured")
+			return
+		}
+		ovsClient.EnableStatistics()
+		if err != nil {
+			fmt.Print(err)
+			log.Fatal(err)
+		}
+	}
+	target := ipAddressFromOvsdb(*ovsdb) + ":2055"
+	err := ovsClient.SetIPFIX(bridge, target, sampling, cacheMax, cacheTimeout)
+	if err != nil {
+		log.Error("Failed to set OVS configuration")
+		log.Error(err)
+	} else {
+		log.Info("OVS configuration changed")
+	}
+}
+
+func exit() {
+	log.Info("Stopping")
+	ovs_stop()
 	if app != nil {
 		app.Stop()
 	}
@@ -369,13 +376,14 @@ func main() {
 	pages := tview.NewPages()
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyCtrlC {
-			stop()
+			exit()
 		}
 		return event
 	})
 
 	mainPage(pages)
 	configPage(pages)
+	welcomePage(pages)
 
 	app.SetRoot(pages, true).SetFocus(pages)
 
