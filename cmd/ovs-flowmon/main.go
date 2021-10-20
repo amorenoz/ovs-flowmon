@@ -19,7 +19,7 @@ import (
 	flowmessage "github.com/netsampler/goflow2/pb"
 	"github.com/netsampler/goflow2/utils"
 	"github.com/rivo/tview"
-	log "github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -34,6 +34,7 @@ var (
 	iface              = flag.String("iface", "", "Interface name where to listen. If ovsdb configuration is enabled"+
 		"The IPv4 address of this interface will be used as target, so make sure the remote vswitchd can reach it")
 	logLevel = flag.String("loglevel", "info", "Log level")
+	log      = logrus.New()
 )
 
 func readFlows(flowTable *view.FlowTable) {
@@ -68,7 +69,7 @@ func readFlows(flowTable *view.FlowTable) {
 			return
 		}
 
-		logFields := log.Fields{
+		logFields := logrus.Fields{
 			"scheme":   listenAddrUrl.Scheme,
 			"hostname": hostname,
 			"port":     port,
@@ -80,21 +81,21 @@ func readFlows(flowTable *view.FlowTable) {
 			sSFlow := &utils.StateSFlow{
 				Format:    formatter,
 				Transport: transporter,
-				Logger:    log.StandardLogger(),
+				Logger:    log,
 			}
 			err = sSFlow.FlowRoutine(Workers, hostname, int(port), ReusePort)
 		} else if listenAddrUrl.Scheme == "netflow" {
 			sNF := &utils.StateNetFlow{
 				Format:    formatter,
 				Transport: transporter,
-				Logger:    log.StandardLogger(),
+				Logger:    log,
 			}
 			err = sNF.FlowRoutine(Workers, hostname, int(port), ReusePort)
 		} else if listenAddrUrl.Scheme == "nfl" {
 			sNFL := &utils.StateNFLegacy{
 				Format:    formatter,
 				Transport: transporter,
-				Logger:    log.StandardLogger(),
+				Logger:    log,
 			}
 			err = sNFL.FlowRoutine(Workers, hostname, int(port), ReusePort)
 		} else {
@@ -283,7 +284,7 @@ func configPage(pages *tview.Pages) {
 		return
 	}
 	// Initialize OVS Configuration client
-	ovsClient, err = ovs.NewOVSClient(*ovsdb, statsViewer)
+	ovsClient, err = ovs.NewOVSClient(*ovsdb, statsViewer, log)
 	if err != nil {
 		fmt.Print(err)
 		log.Fatal(err)
@@ -337,13 +338,17 @@ func ovs_stop() {
 }
 
 func ovs_start(bridge string, sampling, cacheMax, cacheTimeout int) {
+	if *ovsdb == "" {
+		log.Error("OVSDB not configured")
+		return
+	}
 	if !ovsClient.Started() {
 		err := ovsClient.Start()
 		if err != nil {
-			log.Error("OVSDB not configured")
+			log.Error("Failed to start Ovs Client")
 			return
 		}
-		ovsClient.EnableStatistics()
+		err = ovsClient.EnableStatistics()
 		if err != nil {
 			fmt.Print(err)
 			log.Fatal(err)
@@ -369,7 +374,7 @@ func exit() {
 
 func main() {
 	flag.Parse()
-	lvl, _ := log.ParseLevel(*logLevel)
+	lvl, _ := logrus.ParseLevel(*logLevel)
 	log.SetLevel(lvl)
 
 	app = tview.NewApplication()
