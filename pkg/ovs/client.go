@@ -130,7 +130,14 @@ func (o *OVSClient) Close() error {
 	return nil
 }
 
+func (o *OVSClient) Started() bool {
+	return o.client.Connected()
+}
+
 func (o *OVSClient) SetIPFIX(bridgeName, target string, sampling, cacheMax, cacheTimeout int) error {
+	if !o.client.Connected() {
+		return fmt.Errorf("Client not connected")
+	}
 	// Reconfigurations don't trigger a template event, to force it first delete
 	// the current IPFIX config and only then create the new one
 	bridge := &Bridge{
@@ -186,7 +193,6 @@ func (o *OVSClient) SetIPFIX(bridgeName, target string, sampling, cacheMax, cach
 }
 
 func NewOVSClient(connStr string, statsBackend stats.StatsBackend) (*OVSClient, error) {
-	var err error
 	dbmodel, err := model.NewDBModel("Open_vSwitch", map[string]model.Model{
 		"Bridge":       &Bridge{},
 		"IPFIX":        &IPFIX{},
@@ -199,19 +205,25 @@ func NewOVSClient(connStr string, statsBackend stats.StatsBackend) (*OVSClient, 
 	if err != nil {
 		return nil, err
 	}
-	err = cli.Connect(context.Background())
-	if err != nil {
-		return nil, err
-	}
-	_, err = cli.MonitorAll(context.TODO())
-	if err != nil {
-		return nil, err
-	}
-
 	return &OVSClient{
 		client: cli,
 		stats:  statsBackend,
 	}, nil
+}
+
+func (o *OVSClient) Start() error {
+	if o.client.Connected() {
+		return nil
+	}
+	err := o.client.Connect(context.Background())
+	if err != nil {
+		return err
+	}
+	_, err = o.client.MonitorAll(context.TODO())
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (o *OVSClient) EnableStatistics() error {
