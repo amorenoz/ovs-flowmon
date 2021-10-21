@@ -228,7 +228,7 @@ func mainPage(pages *tview.Pages) {
 		})
 	}
 
-	menuList.AddItem("Start", "", 's', start)
+	menuList.AddItem("Start", "", 'S', start)
 	if *ovsdb != "" {
 		menuList.AddItem("Config", "", 'c', config)
 	}
