@@ -19,7 +19,7 @@ import (
 	flowmessage "github.com/netsampler/goflow2/pb"
 	"github.com/netsampler/goflow2/utils"
 	"github.com/rivo/tview"
-	log "github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -29,13 +29,12 @@ var (
 	statsViewer *stats.StatsView
 	ovsClient   *ovs.OVSClient
 
-	started bool = false
-
 	fieldList []string = []string{"InIf", "OutIf", "SrcMac", "DstMac", "VlanID", "Etype", "SrcAddr", "DstAddr", "Proto", "SrcPort", "DstPort", "FlowDirection"}
 	ovsdb              = flag.String("ovsdb", "", "Enable OVS configuration by providing a database string, e.g: unix:/var/run/openvswitch/db.sock")
 	iface              = flag.String("iface", "", "Interface name where to listen. If ovsdb configuration is enabled"+
 		"The IPv4 address of this interface will be used as target, so make sure the remote vswitchd can reach it")
 	logLevel = flag.String("loglevel", "info", "Log level")
+	log      = logrus.New()
 )
 
 func readFlows(flowTable *view.FlowTable) {
@@ -70,7 +69,7 @@ func readFlows(flowTable *view.FlowTable) {
 			return
 		}
 
-		logFields := log.Fields{
+		logFields := logrus.Fields{
 			"scheme":   listenAddrUrl.Scheme,
 			"hostname": hostname,
 			"port":     port,
@@ -82,21 +81,21 @@ func readFlows(flowTable *view.FlowTable) {
 			sSFlow := &utils.StateSFlow{
 				Format:    formatter,
 				Transport: transporter,
-				Logger:    log.StandardLogger(),
+				Logger:    log,
 			}
 			err = sSFlow.FlowRoutine(Workers, hostname, int(port), ReusePort)
 		} else if listenAddrUrl.Scheme == "netflow" {
 			sNF := &utils.StateNetFlow{
 				Format:    formatter,
 				Transport: transporter,
-				Logger:    log.StandardLogger(),
+				Logger:    log,
 			}
 			err = sNF.FlowRoutine(Workers, hostname, int(port), ReusePort)
 		} else if listenAddrUrl.Scheme == "nfl" {
 			sNFL := &utils.StateNFLegacy{
 				Format:    formatter,
 				Transport: transporter,
-				Logger:    log.StandardLogger(),
+				Logger:    log,
 			}
 			err = sNFL.FlowRoutine(Workers, hostname, int(port), ReusePort)
 		} else {
@@ -159,6 +158,24 @@ func ipAddressFromOvsdb(ovsdb string) string {
 	return ""
 }
 
+func welcomePage(pages *tview.Pages) {
+	welcome := tview.NewModal().SetText(`
+
+Welcome to OvS Flow Monitor!
+
+If an OvS vSwitch is present, you can start, stop and reconfigure the IPFIX Exporter from the main menu. If not, please start an IPFIX Exporter that sends flows to tcp::2055.
+
+Note that if you had already started the IPFIX exporter, it might take some time (e.g: 10mins in OvS) before it sends us the Templates, without which we cannot
+decode the IPFIX Flow Records. It is possible that re-starting the exporter helps.
+
+
+`).AddButtons([]string{"Start"}).SetDoneFunc(func(index int, label string) {
+		pages.HidePage("welcome")
+		pages.ShowPage("main")
+	})
+	pages.AddPage("welcome", welcome, true, true)
+}
+
 func mainPage(pages *tview.Pages) {
 	aggregates := make(map[string]bool, 0)
 	for _, key := range fieldList {
@@ -176,19 +193,8 @@ func mainPage(pages *tview.Pages) {
 	menu.AddItem(menuList, 0, 2, true)
 	menu.AddItem(statsViewer.View(), 0, 2, false)
 
-	start := func() {
-		log.Info("Started flow processing")
-		if !started {
-			readFlows(flowTable)
-			started = true
-		}
-		app.SetFocus(flowTable.View)
-	}
-	config := func() {
-		pages.ShowPage("config")
-	}
-	stop := func() {
-		stop()
+	exit := func() {
+		exit()
 	}
 	logs := func() {
 		app.SetFocus(status)
@@ -228,15 +234,22 @@ func mainPage(pages *tview.Pages) {
 		})
 	}
 
-	menuList.AddItem("Start", "", 'S', start)
 	if *ovsdb != "" {
-		menuList.AddItem("Config", "", 'c', config)
+		menuList.AddItem("Start OvS IPFIX Exporter", "", 's', func() {
+			ovs_start("br-int", ovs.DefaultSampling, ovs.DefaultCacheMax, ovs.DefaultActiveTimeout)
+		})
+		menuList.AddItem("(Re)Configure OvS IPFIX Exporter", "", 'c', func() {
+			pages.ShowPage("config")
+		})
+		menuList.AddItem("Stop OvS IPFIX Exporter", "", 't', func() {
+			ovs_stop()
+		})
 	}
-	menuList.AddItem("Stop", "", 't', stop).
-		AddItem("Flows", "", 'f', flows).
-		AddItem("Logs", "", 'l', logs).
+	menuList.AddItem("Flows", "", 'f', flows).
 		AddItem("Add/Remove Fields from aggregate", "", 'a', show_aggregate).
-		AddItem("Sort by ", "", 's', sort_by)
+		AddItem("Sort by ", "", 's', sort_by).
+		AddItem("Logs", "", 'l', logs).
+		AddItem("Exit", "", 'e', exit)
 	flowTable.View.SetDoneFunc(func(key tcell.Key) {
 		app.SetFocus(menuList)
 	})
@@ -252,7 +265,8 @@ func mainPage(pages *tview.Pages) {
 
 	flex := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(menu, 0, 2, true).AddItem(flowTable.View, 0, 5, false).AddItem(status, 0, 1, false)
 
-	pages.AddPage("main", flex, true, true)
+	readFlows(flowTable)
+	pages.AddPage("main", flex, true, false)
 }
 
 func center(p tview.Primitive, width, height int) tview.Primitive {
@@ -270,13 +284,7 @@ func configPage(pages *tview.Pages) {
 		return
 	}
 	// Initialize OVS Configuration client
-	target := ipAddressFromOvsdb(*ovsdb) + ":2055"
-	ovsClient, err = ovs.NewOVSClient(*ovsdb, statsViewer)
-	if err != nil {
-		fmt.Print(err)
-		log.Fatal(err)
-	}
-	ovsClient.EnableStatistics()
+	ovsClient, err = ovs.NewOVSClient(*ovsdb, statsViewer, log)
 	if err != nil {
 		fmt.Print(err)
 		log.Fatal(err)
@@ -285,11 +293,10 @@ func configPage(pages *tview.Pages) {
 	sampling := 400
 	bridge := "br-int"
 	form := tview.NewForm()
-	form.SetTitle("OVS Configuration").SetBorder(true)
 	form.AddDropDown("Bridge", []string{"br-int"}, 0, func(option string, _ int) {
 		bridge = option
 	}). // TODO: Add more
-		AddInputField("Sampling", "400", 3, func(textToCheck string, _ rune) bool {
+		AddInputField("Sampling", "400", 5, func(textToCheck string, _ rune) bool {
 			_, err := strconv.ParseInt(textToCheck, 0, 32)
 			return err == nil
 		}, func(text string) {
@@ -299,32 +306,67 @@ func configPage(pages *tview.Pages) {
 			}
 		}).
 		AddButton("Save", func() {
-			err := ovsClient.SetIPFIX(bridge, target, sampling, ovs.DefaultCacheMax, ovs.DefaultActiveTimeout)
-			if err != nil {
-				log.Error("Failed to set OVS configuration")
-				log.Error(err)
-			} else {
-				log.Info("OVS configuration changed")
-			}
+			ovs_start(bridge, sampling, ovs.DefaultCacheMax, ovs.DefaultActiveTimeout)
 			pages.HidePage("config")
 		}).
 		AddButton("Cancel", func() {
 			pages.HidePage("config")
 		})
-	// TODO add cache and
-	pages.AddPage("config", center(form, 40, 10), true, false)
+	// TODO add cache size, etc
+	configMenu := tview.NewFlex()
+	configMenu.SetTitle("OVS Configuration").SetBorder(true)
+	configMenu.SetDirection(tview.FlexRow).AddItem(tview.NewTextView().SetText(`Configure OvS IPFIX Exporter
+
+Use <Tab> to move around the form
+Press <Save> to save the configuration
+Press <Cancel> to go back to the main menu
+
+
+`), 0, 1, false).
+		AddItem(form, 0, 2, true)
+	pages.AddPage("config", center(configMenu, 60, 20), true, false)
 }
 
-func stop() {
-	log.Info("Stopping")
+func ovs_stop() {
 	if ovsClient != nil {
 		log.Info("Stopping IPFIX exporter")
 		err := ovsClient.Close()
 		if err != nil {
 			log.Error(err)
-			fmt.Print(err)
 		}
 	}
+}
+
+func ovs_start(bridge string, sampling, cacheMax, cacheTimeout int) {
+	if *ovsdb == "" {
+		log.Error("OVSDB not configured")
+		return
+	}
+	if !ovsClient.Started() {
+		err := ovsClient.Start()
+		if err != nil {
+			log.Error("Failed to start Ovs Client")
+			return
+		}
+		err = ovsClient.EnableStatistics()
+		if err != nil {
+			fmt.Print(err)
+			log.Fatal(err)
+		}
+	}
+	target := ipAddressFromOvsdb(*ovsdb) + ":2055"
+	err := ovsClient.SetIPFIX(bridge, target, sampling, cacheMax, cacheTimeout)
+	if err != nil {
+		log.Error("Failed to set OVS configuration")
+		log.Error(err)
+	} else {
+		log.Info("OVS configuration changed")
+	}
+}
+
+func exit() {
+	log.Info("Stopping")
+	ovs_stop()
 	if app != nil {
 		app.Stop()
 	}
@@ -332,20 +374,21 @@ func stop() {
 
 func main() {
 	flag.Parse()
-	lvl, _ := log.ParseLevel(*logLevel)
+	lvl, _ := logrus.ParseLevel(*logLevel)
 	log.SetLevel(lvl)
 
 	app = tview.NewApplication()
 	pages := tview.NewPages()
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyCtrlC {
-			stop()
+			exit()
 		}
 		return event
 	})
 
 	mainPage(pages)
 	configPage(pages)
+	welcomePage(pages)
 
 	app.SetRoot(pages, true).SetFocus(pages)
 

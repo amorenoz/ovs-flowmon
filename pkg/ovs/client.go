@@ -7,11 +7,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bombsimon/logrusr/v2"
 	"github.com/ovn-org/libovsdb/cache"
 	"github.com/ovn-org/libovsdb/client"
 	"github.com/ovn-org/libovsdb/model"
 	"github.com/ovn-org/libovsdb/ovsdb"
-	log "github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -97,6 +98,7 @@ type Bridge struct {
 type OVSClient struct {
 	client client.Client
 	stats  stats.StatsBackend
+	log    *logrus.Logger
 }
 
 func (o *OVSClient) Close() error {
@@ -112,25 +114,32 @@ func (o *OVSClient) Close() error {
 		bridge.IPFIX = nil
 		clearOps, err := o.client.Where(&bridge).Update(&bridge, &bridge.IPFIX)
 		if err != nil {
-			log.Error(err)
+			o.log.Error(err)
 		} else {
 			response, err := o.client.Transact(context.TODO(), clearOps...)
 			if err != nil {
-				log.Error(err)
+				o.log.Error(err)
 			}
 			if opErr, err := ovsdb.CheckOperationResults(response, clearOps); err != nil {
-				log.Errorf("%s: %+v", err.Error(), opErr)
+				o.log.Errorf("%s: %+v", err.Error(), opErr)
 			}
 		}
 	}
 	if err := o.DisableStatistics(); err != nil {
-		log.Error(err)
+		o.log.Error(err)
 	}
 	o.client.Close()
 	return nil
 }
 
+func (o *OVSClient) Started() bool {
+	return o.client.Connected()
+}
+
 func (o *OVSClient) SetIPFIX(bridgeName, target string, sampling, cacheMax, cacheTimeout int) error {
+	if !o.client.Connected() {
+		return fmt.Errorf("Client not connected")
+	}
 	// Reconfigurations don't trigger a template event, to force it first delete
 	// the current IPFIX config and only then create the new one
 	bridge := &Bridge{
@@ -143,7 +152,7 @@ func (o *OVSClient) SetIPFIX(bridgeName, target string, sampling, cacheMax, cach
 	}
 	response, err := o.client.Transact(context.TODO(), clearOps...)
 	if opErr, err := ovsdb.CheckOperationResults(response, clearOps); err != nil {
-		log.Warnf("%s: %+v", err.Error(), opErr)
+		o.log.Warnf("%s: %+v", err.Error(), opErr)
 	}
 	if err != nil {
 		return err
@@ -169,12 +178,12 @@ func (o *OVSClient) SetIPFIX(bridgeName, target string, sampling, cacheMax, cach
 	}
 	ops := append(insertOps, updateOps...)
 	response, err = o.client.Transact(context.TODO(), ops...)
-	logFields := log.Fields{
+	logFields := logrus.Fields{
 		"operation": ops,
 		"response":  response,
 		"err":       err,
 	}
-	log.WithFields(logFields).Debug("OVS IPFIX Configuration")
+	o.log.WithFields(logFields).Debug("OVS IPFIX Configuration")
 
 	if err != nil {
 		return err
@@ -185,8 +194,7 @@ func (o *OVSClient) SetIPFIX(bridgeName, target string, sampling, cacheMax, cach
 	return nil
 }
 
-func NewOVSClient(connStr string, statsBackend stats.StatsBackend) (*OVSClient, error) {
-	var err error
+func NewOVSClient(connStr string, statsBackend stats.StatsBackend, log *logrus.Logger) (*OVSClient, error) {
 	dbmodel, err := model.NewDBModel("Open_vSwitch", map[string]model.Model{
 		"Bridge":       &Bridge{},
 		"IPFIX":        &IPFIX{},
@@ -195,23 +203,31 @@ func NewOVSClient(connStr string, statsBackend stats.StatsBackend) (*OVSClient, 
 	if err != nil {
 		return nil, err
 	}
-	cli, err := client.NewOVSDBClient(dbmodel, client.WithEndpoint(connStr))
+	logr := logrusr.New(log)
+	cli, err := client.NewOVSDBClient(dbmodel, client.WithEndpoint(connStr), client.WithLogger(&logr))
 	if err != nil {
 		return nil, err
 	}
-	err = cli.Connect(context.Background())
-	if err != nil {
-		return nil, err
-	}
-	_, err = cli.MonitorAll(context.TODO())
-	if err != nil {
-		return nil, err
-	}
-
 	return &OVSClient{
 		client: cli,
 		stats:  statsBackend,
+		log:    log,
 	}, nil
+}
+
+func (o *OVSClient) Start() error {
+	if o.client.Connected() {
+		return nil
+	}
+	err := o.client.Connect(context.Background())
+	if err != nil {
+		return err
+	}
+	_, err = o.client.MonitorAll(context.TODO())
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (o *OVSClient) EnableStatistics() error {
@@ -235,17 +251,17 @@ func (o *OVSClient) EnableStatistics() error {
 		return err
 	}
 	response, err := o.client.Transact(context.TODO(), mutateOps...)
-	logFields := log.Fields{
+	logFields := logrus.Fields{
 		"operation": mutateOps,
 		"response":  response,
 		"err":       err,
 	}
-	log.WithFields(logFields).Debug("OVS Statistics Enabling")
+	o.log.WithFields(logFields).Debug("OVS Statistics Enabling")
 	if err != nil {
-		log.Error(err)
+		o.log.Error(err)
 	}
 	if opErr, err := ovsdb.CheckOperationResults(response, mutateOps); err != nil {
-		log.Errorf("%s: %+v", err.Error(), opErr)
+		o.log.Errorf("%s: %+v", err.Error(), opErr)
 	}
 
 	// Register update callback
@@ -277,27 +293,27 @@ func (o *OVSClient) DisableStatistics() error {
 		return err
 	}
 	response, err := o.client.Transact(context.TODO(), mutateOps...)
-	logFields := log.Fields{
+	logFields := logrus.Fields{
 		"operation": mutateOps,
 		"response":  response,
 		"err":       err,
 	}
-	log.WithFields(logFields).Debug("OVS Statistics Enabling")
+	o.log.WithFields(logFields).Debug("OVS Statistics Enabling")
 	if err != nil {
-		log.Error(err)
+		o.log.Error(err)
 	}
 	if opErr, err := ovsdb.CheckOperationResults(response, mutateOps); err != nil {
-		log.Errorf("%s: %+v", err.Error(), opErr)
+		o.log.Errorf("%s: %+v", err.Error(), opErr)
 	}
 	return nil
 }
 
 func (o *OVSClient) updateStatistics(old_statistics, statistics map[string]string) {
-	logFields := log.Fields{
+	logFields := logrus.Fields{
 		"old": old_statistics,
 		"new": statistics,
 	}
-	log.WithFields(logFields).Debug("Updating Statistics")
+	o.log.WithFields(logFields).Debug("Updating Statistics")
 
 	if cpu, ok := statistics["cpu"]; ok {
 		o.stats.UpdateStat(statNames["cpu"], cpu)
@@ -310,7 +326,7 @@ func (o *OVSClient) updateStatistics(old_statistics, statistics map[string]strin
 		for _, field := range strings.Split(mem, ",") {
 			float_val, err := strconv.ParseFloat(field, 64)
 			if err != nil {
-				log.Error(err)
+				o.log.Error(err)
 				continue
 			}
 			mem_stat = append(mem_stat, fmt.Sprintf("%.2f", float_val/1024))
